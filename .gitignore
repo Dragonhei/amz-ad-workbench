@@ -19,6 +19,7 @@ backend/data/*.db
 backend/data/*.sqlite
 backend/data/*.sqlite3
 backend/data/uploads/
+backend/data/exports/
 backend/data/*.bak
 
 # ---- Secrets / local env ----
@@ -45,3 +46,4 @@ coverage/
 vite.config.js.timestamp-*.mjs
 *.timestamp-*.mjs
 *.mjs.timestamp*
+.vitebuild/

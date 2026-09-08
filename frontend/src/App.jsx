@@ -31,13 +31,13 @@ const MENU = [
 function Shell() {
   const nav = useNavigate()
   const loc = useLocation()
-  const [shopId, setShopId] = useState(1)
+  const [shopIds, setShopIds] = useState([1])
   const [shops, setShops] = useState([])
   const [user, setUser] = useState(localStorage.getItem('wb_user') || 'admin')
   const [role, setRole] = useState('admin')
 
   useEffect(() => {
-    api.get('/admin/shops').then((r) => setShops(r.data.items || [])).catch(() => {})
+    api.get('/bi/shops').then((r) => setShops(r.data.items || [])).catch(() => {})
   }, [user])
 
   useEffect(() => {
@@ -50,11 +50,19 @@ function Shell() {
   const switchUser = (v) => {
     localStorage.setItem('wb_user', v)
     setUser(v)
+    setShopIds([1])
     message.info(`已切换账号「${v}」，数据权限与可见范围会随之变化`)
   }
 
+  // 选中的店铺清单（空 = 全部授权店铺）；币种取并集，混合时显示 MIXED
+  const selected = shops.filter((s) => shopIds.includes(s.id))
+  const visible = selected.length ? selected : shops
+  const currency = visible.length && visible.every((s) => s.currency === visible[0].currency)
+    ? visible[0].currency : 'MIXED'
+  const shopId = shopIds[0] || 1
+
   return (
-    <Ctx.Provider value={{ shopId, setShopId, user, role }}>
+    <Ctx.Provider value={{ shopIds, setShopIds, shopId, shops, user, role, currency }}>
       <Layout style={{ minHeight: '100vh' }}>
         <Sider width={200} theme="dark">
           <div className="wb-logo">AI 广告分析工作台<small>Amazon Ads Workbench</small></div>
@@ -65,11 +73,15 @@ function Shell() {
           <Header style={{ background: '#fff', display: 'flex', alignItems: 'center',
                            justifyContent: 'space-between', padding: '0 16px',
                            borderBottom: '1px solid #f0f0f0' }}>
-            <Space size={12}>
-              <span style={{ fontSize: 13, color: '#8c8c8c' }}>当前店铺</span>
-              <Select size="small" style={{ width: 190 }} value={shopId} onChange={setShopId}
-                      options={(shops.length ? shops : [{ id: 1, name: '示例店铺 · 美国站' }])
-                        .map((s) => ({ value: s.id, label: s.name }))} />
+            <Space size={12} wrap>
+              <span style={{ fontSize: 13, color: '#8c8c8c' }}>店铺</span>
+              <Select size="small" mode="multiple" allowClear style={{ minWidth: 280 }} value={shopIds}
+                      onChange={setShopIds} placeholder="选择店铺（留空 = 全部授权店铺）"
+                      options={(shops.length ? shops : [{ id: 1, name: '示例店铺 · 美国站', marketplace: 'US', currency: 'USD' }])
+                        .map((s) => ({ value: s.id, label: `${s.name}（${s.marketplace}·${s.currency}）` }))} />
+              <Tag color={currency === 'MIXED' ? 'orange' : 'green'}>
+                {currency === 'MIXED' ? '多币种' : currency}
+              </Tag>
             </Space>
             <Space size={8}>
               <Tag color={role === 'admin' ? 'purple' : 'blue'}>

@@ -25,15 +25,15 @@ def check(name, cond, extra=""):
         print(f"  [FAIL] {name} {extra}")
 
 
-def upload(fname, expect_type, strategy="overwrite"):
+def upload(fname, expect_type, strategy="overwrite", shop_id=1):
     with open(os.path.join(SAMPLE, fname), "rb") as f:
-        r = c.post("/api/ingest/preview", data={"shop_id": 1}, files={"file": (fname, f)})
+        r = c.post("/api/ingest/preview", data={"shop_id": shop_id}, files={"file": (fname, f)})
     p = r.json()
     assert r.status_code == 200, p
     if not p.get("ok"):
         return p
     rt = p["report_type"]
-    r2 = c.post("/api/ingest/commit", json={"tmp_path": p["tmp_path"], "shop_id": 1,
+    r2 = c.post("/api/ingest/commit", json={"tmp_path": p["tmp_path"], "shop_id": shop_id,
                                             "report_type": rt, "mapping": p["mapping"],
                                             "strategy": strategy, "file_name": fname})
     res = r2.json()
@@ -87,6 +87,22 @@ check("趋势序列", len(tr["points"]) >= 25, f"{len(tr['points'])} 天")
 ov = c.get("/api/bi/overview?shop_id=1", headers=H).json()
 check("概览含环比字段", "delta" in ov and "current" in ov,
       f"本期 ACOS {ov['current'].get('acos')}%，上期数据为空时环比为 None")
+
+print("\n=== 5b. 多店铺 / 多站点 ===")
+sh = c.get("/api/bi/shops", headers=H).json()["items"]
+check("店铺清单含站点与币种", len(sh) >= 2 and all("marketplace" in s and "currency" in s for s in sh),
+      f"{len(sh)} 个店铺，含 {','.join(s['marketplace'] for s in sh)}")
+# 给店铺 2（德国站）也灌一份同模板 SP 报表，验证跨店聚合
+up2 = upload("sp_keyword_report.csv", "SP", shop_id=2)
+check("店铺2 报表入库", (up2.get("row_ok") or 0) > 0)
+single = c.get("/api/bi/query?shop_id=1&group_by=campaign", headers=H).json()["summary"]["spend"]
+multi = c.get("/api/bi/query?shop_id=1&shop_id=2&group_by=campaign", headers=H).json()
+check("跨店聚合花费 > 单店（P1-1）", multi["summary"]["spend"] > single,
+      f"单店 ${single} → 跨店 ${multi['summary']['spend']}")
+check("跨店聚合活动数不变", len(multi["rows"]) == 3, f"{len(multi['rows'])} 个活动")
+mp = c.get("/api/bi/query?shop_id=1&shop_id=2&marketplace=US&group_by=campaign", headers=H).json()
+check("marketplace 过滤仅保留该站点", abs(mp["summary"]["spend"] - single) < 0.01,
+      f"仅 US 站点花费 ${mp['summary']['spend']}")
 
 print("\n=== 6. 分析（规则引擎兜底）===")
 rr = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False},

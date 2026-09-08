@@ -103,18 +103,20 @@ def del_user(uid: int, db: Session = Depends(get_db), u: User = Depends(require_
 def shops(db: Session = Depends(get_db), u: User = Depends(require_admin)):
     rows = db.query(Shop).order_by(Shop.id).all()
     return {"items": [{"id": r.id, "name": r.name, "marketplace": r.marketplace,
-                       "currency": r.currency} for r in rows]}
+                       "currency": r.currency, "timezone": r.timezone} for r in rows]}
 
 
 class ShopIn(BaseModel):
     name: str
     marketplace: str = "US"
     currency: str = "USD"
+    timezone: str = "America/New_York"
 
 
 @router.post("/shops")
 def create_shop(body: ShopIn, db: Session = Depends(get_db), u: User = Depends(require_admin)):
-    s = Shop(name=body.name, marketplace=body.marketplace, currency=body.currency)
+    s = Shop(name=body.name, marketplace=body.marketplace, currency=body.currency,
+             timezone=body.timezone)
     db.add(s)
     db.commit()
     return {"ok": True, "id": s.id}

@@ -1,6 +1,7 @@
 """初始化种子数据：组织/店铺/账号、指标字典、默认规则、提示词、示例知识库。"""
 import json
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .auth import hash_password
@@ -9,6 +10,16 @@ from .metrics import METRICS
 from .models import (AnalysisRule, KbBidRule, KbCompetitor, KbKeyword, LlmProvider,
                      MetricDefinition, Org, PromptTemplate, Shop, User)
 from .rules import DEFAULT_PROMPT, DEFAULT_RULES
+
+
+def _ensure_schema(db: Session):
+    """兼容旧库：缺失列时补齐（SQLite 的 create_all 不会 ALTER 已存在的表）。"""
+    cols = [r[1] for r in db.execute(text("PRAGMA table_info(shop)")).fetchall()]
+    if "timezone" not in cols:
+        db.execute(text("ALTER TABLE shop ADD COLUMN timezone VARCHAR(32) "
+                        "DEFAULT 'America/New_York'"))
+        db.commit()
+
 
 SEED_KEYWORDS = [
     ("shower curtain liner", "功能词", "high", "active", "B0C1"),
@@ -27,11 +38,21 @@ SEED_KEYWORDS = [
 def seed_all(db: Session = None):
     db = db or SessionLocal()
     try:
+        _ensure_schema(db)
         if not db.query(Org).get(1):
             db.add(Org(id=1, name="默认组织"))
-        if not db.query(Shop).get(1):
-            db.add(Shop(id=1, org_id=1, name="示例店铺 · 美国站", marketplace="US", currency="USD"))
-            db.add(Shop(id=2, org_id=1, name="示例店铺 · 德国站", marketplace="DE", currency="EUR"))
+        # 多店铺 / 多站点：逐店幂等确保（已存在则不重复插入，缺失时区则补正）
+        SHOPS = [
+            (1, "示例店铺 · 美国站", "US", "USD", "America/New_York"),
+            (2, "示例店铺 · 德国站", "DE", "EUR", "Europe/Berlin"),
+            (3, "示例店铺 · 英国站", "UK", "GBP", "Europe/London"),
+        ]
+        for sid, name, mp, cur, tz in SHOPS:
+            ex = db.query(Shop).get(sid)
+            if not ex:
+                db.add(Shop(id=sid, org_id=1, name=name, marketplace=mp, currency=cur, timezone=tz))
+            else:
+                ex.timezone = tz   # 已知示例店铺：始终校正为正确站点时区
         if not db.query(User).filter(User.username == "admin").first():
             db.add(User(username="admin", password_hash=hash_password("admin123"),
                         full_name="系统管理员", role="admin", allowed_shop_ids="[]"))

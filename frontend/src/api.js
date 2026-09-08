@@ -17,6 +17,15 @@ api.interceptors.response.use(
 
 export default api
 
-export const fmtMoney = (v) => `$${(v ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+// 站点币种符号表（多店铺 / 多站点场景下的金额格式化）
+export const CUR_SYMBOL = {
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CAD: 'C$', MXN: '$', INR: '₹',
+  AUD: 'A$', CNY: '¥', BRL: 'R$', FR: '€', DE: '€', SE: 'kr', NL: '€',
+  IT: '€', ES: '€', BE: '€', PL: 'zł',
+}
+export const fmtMoney = (v, cur = 'USD') => {
+  const sym = CUR_SYMBOL[cur] ?? ''
+  return `${sym}${(v ?? 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+}
 export const fmtPct = (v) => `${(v ?? 0).toFixed(2)}%`
 export const fmtNum = (v) => (v ?? 0).toLocaleString('en-US')

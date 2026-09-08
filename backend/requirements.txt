@@ -1,0 +1,9 @@
+# Amazon Ads Workbench —— 后端运行依赖
+# 适用 Python >= 3.10
+fastapi>=0.110,<0.117
+uvicorn[standard]>=0.27
+sqlalchemy>=2.0,<2.1
+pydantic>=2.6,<3.0
+python-multipart>=0.0.9
+httpx>=0.27
+openpyxl>=3.1

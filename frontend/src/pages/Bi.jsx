@@ -25,11 +25,12 @@ const METRIC_COLS = [
 const NAME_FIELD = { campaign: 'campaign_name', adgroup: 'adgroup_name', keyword: 'keyword_text' }
 
 export default function Bi() {
-  const { shopId } = useCtx()
+  const { shopIds = [1], currency = 'USD', shops = [] } = useCtx()
   const [range, setRange] = useState(null)
   const [groupBy, setGroupBy] = useState('campaign')
   const [campaigns, setCampaigns] = useState([])
   const [selCamps, setSelCamps] = useState([])
+  const [marketplace, setMarketplace] = useState('')
   const [kwLike, setKwLike] = useState('')
   const [minClicks, setMinClicks] = useState(null)
   const [maxAcos, setMaxAcos] = useState(null)
@@ -40,12 +41,26 @@ export default function Bi() {
   const [drill, setDrill] = useState([])      // [{campaign_id, adgroup_id}]
   const [loading, setLoading] = useState(false)
 
+  // 把当前选中的店铺列表写成重复 query 参数（shop_id=1&shop_id=2…）
+  const shopQs = (qs) => {
+    if (shopIds && shopIds.length) shopIds.forEach((id) => qs.append('shop_id', String(id)))
+    if (marketplace) qs.set('marketplace', marketplace)
+    return qs
+  }
+
+  const mpOptions = useMemo(() => {
+    const set = [...new Set(shops.map((s) => s.marketplace).filter(Boolean))]
+    return [{ value: '', label: '全部站点' }, ...set.map((m) => ({ value: m, label: m }))]
+  }, [shops])
+
   useEffect(() => {
-    api.get(`/bi/range?shop_id=${shopId}`).then((r) => {
+    const qs = shopQs(new URLSearchParams())
+    api.get(`/bi/range?${qs}`).then((r) => {
       if (r.data.start) setRange([dayjs(r.data.start), dayjs(r.data.end)])
     }).catch(() => {})
-    api.get(`/bi/campaigns?shop_id=${shopId}`).then((r) => setCampaigns(r.data.items)).catch(() => {})
-  }, [shopId])
+    const qc = shopQs(new URLSearchParams())
+    api.get(`/bi/campaigns?${qc}`).then((r) => setCampaigns(r.data.items)).catch(() => {})
+  }, [shopIds, marketplace])
 
   const filters = useMemo(() => {
     const f = {}
@@ -58,10 +73,10 @@ export default function Bi() {
 
   const load = () => {
     setLoading(true)
-    const qs = new URLSearchParams({
-      shop_id: shopId, group_by: groupBy, sort_by: sortBy, sort_dir: sortDir,
+    const qs = shopQs(new URLSearchParams({
+      group_by: groupBy, sort_by: sortBy, sort_dir: sortDir,
       filters: JSON.stringify(filters), size: 500,
-    })
+    }))
     if (range?.[0]) { qs.set('start', range[0].format('YYYY-MM-DD')); qs.set('end', range[1].format('YYYY-MM-DD')) }
     Promise.all([
       api.get(`/bi/query?${qs}`),
@@ -70,10 +85,10 @@ export default function Bi() {
       .catch((e) => message.error(e.message))
       .finally(() => setLoading(false))
   }
-  useEffect(load, [shopId, range, groupBy, filters, sortBy, sortDir])
+  useEffect(load, [shopIds, marketplace, range, groupBy, filters, sortBy, sortDir])
 
   const loadDrill = (path) => {
-    const qs = new URLSearchParams({ shop_id: shopId })
+    const qs = shopQs(new URLSearchParams())
     if (range?.[0]) { qs.set('start', range[0].format('YYYY-MM-DD')); qs.set('end', range[1].format('YYYY-MM-DD')) }
     if (path.length >= 1) qs.set('campaign_id', path[0].id)
     if (path.length >= 2) qs.set('adgroup_id', path[1].id)
@@ -99,9 +114,9 @@ export default function Bi() {
     return [...base, ...METRIC_COLS.map((m) => ({
       title: m.title, dataIndex: m.code, align: 'right', width: 110,
       sorter: true,
-      render: (v) => m.render(v),
+      render: (v) => m.render(v, currency),
     }))]
-  }, [groupBy])
+  }, [groupBy, currency])
 
   const chartOpt = useMemo(() => {
     const pts = trend.points || []
@@ -136,6 +151,8 @@ export default function Bi() {
                        { label: '广告组', value: 'adgroup' },
                        { label: '关键词', value: 'keyword' },
                      ]} />
+          <Select size="small" style={{ width: 140 }} value={marketplace} onChange={setMarketplace}
+                  options={mpOptions} />
           <Select size="small" mode="multiple" allowClear style={{ minWidth: 220 }} placeholder="筛选活动"
                   value={selCamps} onChange={setSelCamps}
                   options={campaigns.map((c) => ({ value: c.id, label: c.name }))} />
@@ -156,12 +173,12 @@ export default function Bi() {
         <Row gutter={[12, 8]}>
           {METRIC_COLS.map((m) => (
             <Col key={m.code} xs={8} sm={6} md={4} xl={2}>
-              <div style={{ fontSize: 16, fontWeight: 500 }}>{m.render(s[m.code])}</div>
+              <div style={{ fontSize: 16, fontWeight: 500 }}>{m.render(s[m.code], currency)}</div>
               <div className="wb-muted">{m.title}</div>
             </Col>
           ))}
           <Col xs={8} sm={6} md={4} xl={2}>
-            <div style={{ fontSize: 16, fontWeight: 500 }}>{fmtMoney(data.total_sales)}</div>
+            <div style={{ fontSize: 16, fontWeight: 500 }}>{fmtMoney(data.total_sales, currency)}</div>
             <div className="wb-muted">总销售额（TACOS 分母）</div>
           </Col>
         </Row>
@@ -193,7 +210,8 @@ export default function Bi() {
                          }}>下钻</Button>)}
                      </Space>),
                  }, ...METRIC_COLS.map((m) => ({
-                   title: m.title, dataIndex: m.code, align: 'right', width: 105, render: (v) => m.render(v),
+                   title: m.title, dataIndex: m.code, align: 'right', width: 105,
+                   render: (v) => m.render(v, currency),
                  }))]} />
         </Card>
       )}
@@ -212,7 +230,7 @@ export default function Bi() {
                  onClick: () => {
                    const f = { ...filters }
                    if (groupBy === 'campaign' && r.campaign_id) f.campaign_ids = [r.campaign_id]
-                   const qs = new URLSearchParams({ shop_id: shopId, filters: JSON.stringify(f) })
+                   const qs = shopQs(new URLSearchParams({ filters: JSON.stringify(f) }))
                    if (range?.[0]) { qs.set('start', range[0].format('YYYY-MM-DD')); qs.set('end', range[1].format('YYYY-MM-DD')) }
                    api.get(`/bi/trend?${qs}`).then((t) => setTrend(t.data))
                  },

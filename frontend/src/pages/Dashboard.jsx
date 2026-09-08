@@ -27,7 +27,7 @@ function Delta({ v, good }) {
 }
 
 export default function Dashboard() {
-  const { shopId } = useCtx()
+  const { shopId, currency = 'USD' } = useCtx()
   const nav = useNavigate()
   const [ov, setOv] = useState(null)
   const [jobs, setJobs] = useState([])
@@ -62,7 +62,7 @@ export default function Dashboard() {
           {KPI.map((m) => (
             <Col key={m.k} xs={12} sm={8} md={6} xl={3}>
               <div className="wb-kpi">
-                {m.money ? fmtMoney(cur[m.k]) : m.pct ? fmtPct(cur[m.k]) : fmtNum(cur[m.k])}
+                {m.money ? fmtMoney(cur[m.k], currency) : m.pct ? fmtPct(cur[m.k]) : fmtNum(cur[m.k])}
               </div>
               <div className="wb-kpi-sub">{m.label}</div>
               <Delta v={dlt[m.k]} good={m.good} />

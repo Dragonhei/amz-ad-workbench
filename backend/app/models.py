@@ -24,8 +24,10 @@ class Shop(Base):
     id = Column(Integer, primary_key=True)
     org_id = Column(Integer, ForeignKey("org.id"), default=1)
     name = Column(String(128), nullable=False)
-    marketplace = Column(String(16), default="US")
-    currency = Column(String(8), default="USD")
+    marketplace = Column(String(16), default="US")        # US|DE|UK|JP|FR|...
+    currency = Column(String(8), default="USD")           # USD|EUR|GBP|JPY|...
+    timezone = Column(String(32), default="America/New_York",
+                      server_default="America/New_York")  # 站点时区，报表周期按站点对齐
     created_at = Column(DateTime, default=utcnow)
 
 
