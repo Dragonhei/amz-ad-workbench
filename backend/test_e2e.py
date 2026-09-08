@@ -1,0 +1,147 @@
+"""端到端冒烟测试：上传解析 → BI 聚合 → 分析 → 知识库 → 冷启动 → 导出。"""
+import json
+import os
+import sys
+
+from fastapi.testclient import TestClient
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from app.main import app          # noqa: E402
+
+c = TestClient(app)
+c.__enter__()          # 触发 startup：建表 + 种子数据
+SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
+H = {"X-Username": "admin"}
+ok = fail = 0
+
+
+def check(name, cond, extra=""):
+    global ok, fail
+    if cond:
+        ok += 1
+        print(f"  [OK]   {name} {extra}")
+    else:
+        fail += 1
+        print(f"  [FAIL] {name} {extra}")
+
+
+def upload(fname, expect_type, strategy="overwrite"):
+    with open(os.path.join(SAMPLE, fname), "rb") as f:
+        r = c.post("/api/ingest/preview", data={"shop_id": 1}, files={"file": (fname, f)})
+    p = r.json()
+    assert r.status_code == 200, p
+    if not p.get("ok"):
+        return p
+    rt = p["report_type"]
+    r2 = c.post("/api/ingest/commit", json={"tmp_path": p["tmp_path"], "shop_id": 1,
+                                            "report_type": rt, "mapping": p["mapping"],
+                                            "strategy": strategy, "file_name": fname})
+    res = r2.json()
+    res.update({"report_type": rt, "detected": p.get("detected_type"),
+                "confidence": p.get("confidence"), "mapping": p.get("mapping")})
+    return res
+
+
+print("\n=== 1. 健康检查 ===")
+check("health", c.get("/api/health").json().get("ok"))
+
+print("\n=== 2. 登录 ===")
+r = c.post("/api/admin/login", json={"username": "admin", "password": "admin123"})
+check("admin 登录", r.status_code == 200, r.text[:120])
+
+print("\n=== 3. 报表解析（自动识别 + 脏数据处理）===")
+res = upload("sp_keyword_report.csv", "SP")
+check("SP 报表自动识别", res.get("report_type") == "SP" or res.get("ok"), str(res.get("report_type")))
+sp = res
+print("    识别置信度", sp.get("confidence"), "| 入库", sp.get("row_ok"),
+      "行 | 异常", sp.get("row_err"), "行 | 期间", sp.get("period"))
+check("SP 行数 > 100", (sp.get("row_ok") or 0) > 100)
+
+st = upload("sp_search_term_report.csv", "ST")
+check("搜索词报表识别为 ST", st.get("report_type") == "ST", str(st.get("report_type")))
+biz = upload("business_report.csv", "BIZ")
+check("业务报告识别为 BIZ", biz.get("report_type") == "BIZ", str(biz.get("report_type")))
+aba = upload("aba_search_terms.csv", "ABA")
+check("ABA 报表识别", aba.get("report_type") == "ABA", str(aba.get("report_type")))
+br = upload("brand_metrics_report.csv", "BR")
+check("BR 报表识别", br.get("report_type") == "BR", str(br.get("report_type")))
+
+print("\n=== 4. 异常与版本 ===")
+issues = c.get(f"/api/ingest/issues?job_id={sp['job_id']}").json()["items"]
+check("记录行级异常", len(issues) > 0, f"{len(issues)} 条，示例：{issues[0]['message'] if issues else ''}")
+vers = c.get("/api/ingest/versions?shop_id=1").json()["items"]
+check("数据版本可追溯", len(vers) >= 5, f"{len(vers)} 个版本")
+
+print("\n=== 5. BI 聚合 ===")
+q = c.get("/api/bi/query?shop_id=1&group_by=campaign&sort_by=spend&sort_dir=desc",
+          headers=H).json()
+check("活动层级聚合", len(q["rows"]) == 3, f"{len(q['rows'])} 个活动")
+s = q["summary"]
+print(f"    汇总：曝光 {s['impressions']} 点击 {s['clicks']} 花费 ${s['spend']} "
+      f"销售 ${s['sales']} ACOS {s['acos']}% TACOS {s['tacos']}%")
+check("TACOS 有值（依赖业务报告）", s["tacos"] > 0, f"{s['tacos']}%")
+kd = c.get("/api/bi/query?shop_id=1&group_by=keyword&sort_by=spend", headers=H).json()
+check("关键词层级下钻", len(kd["rows"]) >= 8, f"{len(kd['rows'])} 个关键词")
+tr = c.get("/api/bi/trend?shop_id=1", headers=H).json()
+check("趋势序列", len(tr["points"]) >= 25, f"{len(tr['points'])} 天")
+ov = c.get("/api/bi/overview?shop_id=1", headers=H).json()
+check("概览含环比字段", "delta" in ov and "current" in ov,
+      f"本期 ACOS {ov['current'].get('acos')}%，上期数据为空时环比为 None")
+
+print("\n=== 6. 分析（规则引擎兜底）===")
+rr = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False},
+            headers=H).json()
+items = rr.get("items", [])
+check("产出结论", len(items) >= 5, f"{len(items)} 条，模式 {rr.get('mode')}")
+dims = {i["dimension"] for i in items}
+check("覆盖多个维度", len(dims) >= 5, str(sorted(dims)))
+ev_total = sum(len(i["evidence"]) for i in items)
+check("每条结论带证据", all(i["evidence"] for i in items), f"共 {ev_total} 条证据")
+for i in items[:3]:
+    print(f"    [{i['priority']}][{i['dimension']}] {i['title'][:70]}")
+cached = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35,
+                                           "use_llm": True}, headers=H).json()
+check("未配置 Key 时自动降级", cached["mode"] == "rule", cached.get("message", "")[:60])
+
+print("\n=== 7. 知识库 ===")
+kw = c.get("/api/kb/keyword?shop_id=1").json()["items"]
+check("关键词库种子数据", len(kw) >= 10, f"{len(kw)} 条")
+imp = c.post("/api/kb/import", json={"entity": "keyword", "shop_id": 1, "mode": "append",
+                                     "rows": [{"term": "waffle shower curtain", "intent": "属性词",
+                                               "relevance": "high", "status": "active"}]}).json()
+check("批量导入", imp.get("inserted") == 1)
+cid = c.post("/api/kb/competitor?shop_id=1", json={"competitor_asin": "B0T001", "brand": "TestBrand",
+                                                   "price": 15.9, "rating": 4.1, "reviews": 300}).json()
+check("新增竞品", cid.get("ok"))
+log = c.get("/api/kb/changes/log?shop_id=1").json()["items"]
+check("变更记录", len(log) >= 2, f"{len(log)} 条")
+
+print("\n=== 8. 新品冷启动 ===")
+lg = c.post("/api/launch/generate", json={"shop_id": 1, "asin": "B0NEW12345",
+                                          "title": "Fabric Shower Curtain",
+                                          "target_acos": 30, "daily_budget": 80},
+            headers=H).json()
+check("方案生成", lg.get("ok"), f"候选词池 {lg.get('keyword_pool')}")
+tree = c.get(f"/api/launch/projects/{lg['project_id']}", headers=H).json()["tree"]
+check("四活动结构", len(tree) == 4, f"{len(tree)} 个活动")
+kwn = sum(len(g["children"]) for c in tree for g in c["children"])
+print(f"    广告组 {sum(len(c['children']) for c in tree)} 个，关键词 {kwn} 个")
+exp = c.get(f"/api/launch/projects/{lg['project_id']}/export", headers=H)
+check("导出 Bulk CSV", exp.status_code == 200, f"{len(exp.text.splitlines())} 行")
+
+print("\n=== 9. 管理后台 ===")
+u = c.get("/api/admin/users", headers=H).json()["items"]
+check("用户列表", len(u) >= 2, f"{len(u)} 个账号")
+us = c.get("/api/admin/usage", headers=H).json()
+check("用量统计", len(us["recent"]) >= 1, f"{len(us['recent'])} 条调用记录")
+au = c.get("/api/admin/audit", headers=H).json()["items"]
+check("审计日志", len(au) >= 1, f"{len(au)} 条")
+
+print("\n=== 10. 权限边界 ===")
+r = c.get("/api/bi/query?shop_id=2", headers={"X-Username": "operator"})
+check("运营无权访问未授权店铺", r.status_code == 403, f"HTTP {r.status_code}")
+r = c.get("/api/admin/users", headers={"X-Username": "operator"})
+check("运营无法访问用户管理", r.status_code == 403, f"HTTP {r.status_code}")
+
+print(f"\n===== 通过 {ok} 项，失败 {fail} 项 =====")
+sys.exit(1 if fail else 0)

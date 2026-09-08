@@ -1,0 +1,15 @@
+html, body, #root { height: 100%; margin: 0; }
+body { background: #f5f6f8; }
+.wb-logo { color: #fff; font-size: 15px; font-weight: 500; padding: 16px 20px; letter-spacing: .5px; }
+.wb-logo small { display: block; font-size: 11px; opacity: .65; font-weight: 400; margin-top: 2px; }
+.wb-content { padding: 16px; }
+.wb-card { margin-bottom: 16px; }
+.wb-kpi { font-size: 22px; font-weight: 500; line-height: 1.2; }
+.wb-kpi-sub { font-size: 12px; color: #8c8c8c; margin-top: 4px; }
+.wb-up { color: #cf1322; }
+.wb-down { color: #389e0d; }
+.wb-dim-title { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+.wb-muted { color: #8c8c8c; font-size: 12px; }
+.wb-pre { background: #fafafa; border: 1px solid #f0f0f0; border-radius: 4px;
+  padding: 8px; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 0; }
+.wb-scroll { max-height: 420px; overflow: auto; }
