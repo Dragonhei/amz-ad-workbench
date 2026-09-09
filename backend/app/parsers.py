@@ -17,6 +17,7 @@ REPORT_TYPES = {
     "BR": "品牌指标报告",
     "ABA": "ABA 搜索词报告",
     "BIZ": "业务报告（TACOS 分母 / 库存）",
+    "INV": "库存报表（可售 / 在途 / 可售天数）",
 }
 
 # canonical 字段 → 说明
@@ -30,6 +31,7 @@ CANONICAL_FIELDS = {
            "new_to_brand_pct", "repeat_purchase_pct"],
     "ABA": ["week_start", "search_term", "search_rank", "top3_click_share", "top3_conv_share"],
     "BIZ": ["date", "asin", "sessions", "page_views", "units", "orders", "total_sales", "inventory"],
+    "INV": ["date", "asin", "sku", "qty", "inbound", "daily_sales", "days_of_cover"],
 }
 # SB/SD 复用 SP 的基础列，并补充品牌/展示广告特有维度
 _SB_SD_EXTRA = ["landing_page_id", "creative_id", "headline", "audience_id", "placement", "associated_asin"]
@@ -44,6 +46,7 @@ REQUIRED_FIELDS = {
     "BR": ["date", "brand_search_volume"],
     "ABA": ["search_term", "search_rank"],
     "BIZ": ["date", "asin", "sessions"],
+    "INV": ["date", "asin", "qty"],
 }
 
 # 别名表：canonical → 可能出现的表头（英文 / 中文 / 变体）
@@ -81,6 +84,15 @@ ALIASES = {
     "page_views": ["page views", "pageviews", "页面浏览量"],
     "total_sales": ["ordered product sales", "total product sales", "total sales", "总销售额"],
     "inventory": ["inventory", "available inventory", "库存", "可用库存"],
+    # 库存报表（INV）专用列别名
+    "sku": ["sku", "merchant sku", "seller sku", "商品编码", "货号"],
+    "qty": ["qty", "quantity", "available", "available units", "sellable", "sellable units",
+            "in stock", "units available", "可售库存", "可用库存量"],
+    "inbound": ["inbound", "inbound units", "in-transit", "in transit", "shipped to amazon",
+                "receipts", "inbound shipped", "在途", "在途库存", "已发货"],
+    "daily_sales": ["units sold", "units ordered", "daily sales", "sales units", "日销量", "日均销量"],
+    "days_of_cover": ["days of cover", "cover days", "weeks of cover", "days cover",
+                      "可售天数", "可覆盖天数"],
     # SB/SD 专用列别名
     "landing_page_id": ["landing page", "landing page id", "landing page url", "落地页", "落地页id"],
     "creative_id": ["creative", "creative id", "creative name", "创意", "创意id"],
@@ -97,9 +109,11 @@ NO_FUZZY = {"campaign_id", "adgroup_id", "keyword_id"}
 NUMERIC_FIELDS = {"impressions", "clicks", "spend", "orders", "units", "sales",
                   "brand_search_volume", "new_to_brand_orders", "new_to_brand_pct",
                   "repeat_purchase_pct", "search_rank", "top3_click_share", "top3_conv_share",
-                  "sessions", "page_views", "total_sales", "inventory"}
+                  "sessions", "page_views", "total_sales", "inventory",
+                  "qty", "inbound", "daily_sales", "days_of_cover"}
 INT_FIELDS = {"impressions", "clicks", "orders", "units", "brand_search_volume",
-              "new_to_brand_orders", "search_rank", "sessions", "page_views", "inventory"}
+              "new_to_brand_orders", "search_rank", "sessions", "page_views", "inventory",
+              "qty", "inbound"}
 
 
 # ---------------------------------------------------------------- 读取文件
@@ -214,10 +228,22 @@ def detect_type(headers, filename=""):
                                         "matched audience", "matched target"):
         scores["SD"] += 8
 
+    # 库存报表（INV）：含在途 / 可售天数，且不含广告 / 业务曝光指标
+    if has("inbound", "in-transit", "shipped to amazon", "receipts", "在途", "已发货"):
+        scores["INV"] += 10
+    elif has("days of cover", "cover days", "weeks of cover", "可售天数", "可覆盖天数"):
+        scores["INV"] += 10
+    elif has("asin", "child asin") and (
+            has("qty", "quantity", "available", "sellable", "in stock", "可售库存")
+            or has("sku", "merchant sku")) and not has("impressions", "clicks", "spend",
+                                                       "sessions", "page views", "ordered product sales"):
+        scores["INV"] += 5
+
     for key, t in (("sp_", "SP"), ("sb_", "SB"), ("sd_", "SD"),
                    ("search_term", "ST"), ("searchterm", "ST"), ("search term", "ST"),
                    ("brand", "BR"), ("aba", "ABA"),
-                   ("business", "BIZ"), ("businessreport", "BIZ")):
+                   ("business", "BIZ"), ("businessreport", "BIZ"),
+                   ("inventory", "INV"), ("inv_", "INV")):
         if key in fn:
             scores[t] += 3
 

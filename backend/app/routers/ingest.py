@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from ..auth import assert_shop_access, current_user
 from ..db import BASE_DIR, get_db
 from ..models import (DatasetVersion, FactAba, FactAdPerf, FactBrandMetric,
-                      FactListingDaily, FactSearchTerm, IngestJob, ParseIssue,
+                      FactInventory, FactListingDaily, FactSearchTerm, IngestJob, ParseIssue,
                       SourceFile, User)
 from ..parsers import (CANONICAL_FIELDS, REPORT_TYPES, build_mapping, detect_type,
                        parse_rows, read_table, REQUIRED_FIELDS)
@@ -114,6 +114,10 @@ def _clear_range(db, shop_id, report_type, d1, d2):
         n = db.query(FactListingDaily).filter(FactListingDaily.shop_id == shop_id,
                                               FactListingDaily.date >= d1,
                                               FactListingDaily.date <= d2).delete()
+    elif report_type == "INV":
+        n = db.query(FactInventory).filter(FactInventory.shop_id == shop_id,
+                                           FactInventory.date >= d1,
+                                           FactInventory.date <= d2).delete()
     else:
         n = 0
     return n
@@ -232,6 +236,12 @@ def commit(payload: CommitIn, db: Session = Depends(get_db), u: User = Depends(c
                 units=int(r.get("units", 0)), orders=int(r.get("orders", 0)),
                 total_sales=float(r.get("total_sales", 0)), inventory=int(r.get("inventory", 0)),
                 version_id=ver.id))
+        elif rt == "INV":
+            objs.append(FactInventory(
+                shop_id=payload.shop_id, date=r["date"], asin=r.get("asin", ""),
+                sku=r.get("sku", ""), qty=int(r.get("qty", 0)), inbound=int(r.get("inbound", 0)),
+                daily_sales=float(r.get("daily_sales", 0)),
+                days_of_cover=float(r.get("days_of_cover", 0)), version_id=ver.id))
     for i in issues:
         db.add(ParseIssue(job_id=job.id, row_no=i["row_no"], severity=i["severity"],
                           column_name=i.get("column_name", ""), raw_value=str(i.get("raw_value", ""))[:200],

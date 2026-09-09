@@ -240,6 +240,23 @@ class FactListingDaily(Base):
     __table_args__ = (Index("ix_fact_ld_shop_date", "shop_id", "date"),)
 
 
+class FactInventory(Base):
+    """库存事实表：按 ASIN / 日期记录可售库存、在途与可售天数（P1-6 库存联动预警）。"""
+    __tablename__ = "fact_inventory"
+    id = Column(Integer, primary_key=True)
+    shop_id = Column(Integer, nullable=False)
+    date = Column(Date, nullable=False)
+    asin = Column(String(32), default="")
+    sku = Column(String(64), default="")
+    qty = Column(Integer, default=0)               # 可售库存
+    inbound = Column(Integer, default=0)            # 在途 / 已发货至 FBA
+    daily_sales = Column(Float, default=0.0)        # 当日销量（用于计算可售天数）
+    days_of_cover = Column(Float, default=0.0)      # 可售天数 = qty / 日均销量
+    version_id = Column(Integer, nullable=True)
+    __table_args__ = (Index("ix_fact_inv_shop_date", "shop_id", "date"),
+                      Index("ix_fact_inv_asin", "shop_id", "asin"))
+
+
 # ---------------------------------------------------------------- 派生层
 class MetricDefinition(Base):
     __tablename__ = "metric_definition"

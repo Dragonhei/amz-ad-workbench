@@ -190,6 +190,10 @@ export default function Analysis() {
           </Card>
 
           <Card size="small" className="wb-card" title={`行动方案（${items.length} 条）`}>
+            {items.some((i) => i.dimension === 'inventory' && i.priority === 'P0') && (
+              <Alert type="error" showIcon style={{ marginBottom: 12 }}
+                message="存在库存告急的在投 ASIN，详情见「库存联动」维度结论" />
+            )}
             {items.length === 0 ? <Empty description="点击左侧「运行分析」生成结论" /> : (
               <Space direction="vertical" style={{ width: '100%' }} size={10}>
                 {Object.entries(byDim).map(([dim, list]) => (

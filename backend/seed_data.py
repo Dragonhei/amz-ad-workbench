@@ -16,6 +16,7 @@ FILES = [
     "sb_keyword_report.csv",
     "sd_product_report.csv",
     "business_report.csv",
+    "inventory_report.csv",
     "aba_search_terms.csv",
     "brand_metrics_report.csv",
 ]

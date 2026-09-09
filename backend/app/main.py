@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .db import Base, engine
 from .models import *          # noqa: F401,F403  建表需要
-from .routers import admin, analysis, bi, ingest, kb, launch
+from .routers import admin, analysis, bi, ingest, inventory, kb, launch
 from .seed import seed_all
 
 app = FastAPI(title="AI 广告分析工作台", version="0.1.0")
@@ -18,6 +18,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
 app.include_router(ingest.router)
 app.include_router(bi.router)
 app.include_router(analysis.router)
+app.include_router(inventory.router)
 app.include_router(kb.router)
 app.include_router(launch.router)
 app.include_router(admin.router)

@@ -135,6 +135,25 @@ sd_tg = c.get("/api/bi/query?shop_id=1&group_by=targeting", headers=H).json()
 check("SD targeting 维度可下钻", len(sd_tg["rows"]) >= 1, f"{len(sd_tg['rows'])} 个定向")
 print(f"    ad_format 各格式花费：", {r["ad_format"]: r["spend"] for r in sd_q["rows"]})
 
+print("\n=== 5d. 库存联动预警（P1-6）===")
+inv = upload("inventory_report.csv", "INV")
+check("库存报表自动识别为 INV", inv.get("report_type") == "INV", str(inv.get("report_type")))
+print("    识别置信度", inv.get("confidence"), "| 入库", inv.get("row_ok"), "行 | 期间", inv.get("period"))
+check("INV 行数 > 0", (inv.get("row_ok") or 0) > 0)
+inv_api = c.get("/api/inventory?shop_id=1", headers=H).json()
+s = inv_api.get("summary", {})
+check("库存看板返回低库存 ASIN", (s.get("low_count") or 0) > 0,
+      f"低库存 {s.get('low_count')} / 在投告急 {s.get('advertised_low')} / 阈值 {s.get('threshold')}")
+check("存在在投告急 ASIN（B0C1/B0C2 在业务报表有销量）",
+      (s.get("advertised_low") or 0) > 0, f"advertised_low={s.get('advertised_low')}")
+low_rows = [r for r in inv_api.get("items", []) if r.get("low_stock")]
+check("低库存明细含 B0C1", any(r["asin"] == "B0C1" for r in low_rows),
+      "低库存 ASIN: " + ",".join(r["asin"] for r in low_rows[:6]))
+# 阈值上调后应不再告警（演示阈值可调）
+inv_hi = c.get("/api/inventory?shop_id=1&threshold=1", headers=H).json()
+check("阈值=1 时低库存归零", (inv_hi.get("summary", {}).get("low_count") or 0) == 0,
+      f"low_count={inv_hi.get('summary', {}).get('low_count')}")
+
 print("\n=== 6. 分析（规则引擎兜底）===")
 rr = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False},
             headers=H).json()
@@ -142,6 +161,10 @@ items = rr.get("items", [])
 check("产出结论", len(items) >= 5, f"{len(items)} 条，模式 {rr.get('mode')}")
 dims = {i["dimension"] for i in items}
 check("覆盖多个维度", len(dims) >= 5, str(sorted(dims)))
+inv_items = [i for i in items if i["dimension"] == "inventory"]
+check("分析含库存联动结论", len(inv_items) >= 1, f"库存维度 {len(inv_items)} 条")
+check("在投告急 ASIN 触发 P0 库存告警", any(i["priority"] == "P0" for i in inv_items),
+      "P0 库存项: " + ("有" if any(i["priority"] == "P0" for i in inv_items) else "无"))
 ev_total = sum(len(i["evidence"]) for i in items)
 check("每条结论带证据", all(i["evidence"] for i in items), f"共 {ev_total} 条证据")
 for i in items[:3]:

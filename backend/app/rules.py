@@ -1,7 +1,7 @@
 """12 维分析维度、内置规则引擎（无 LLM 时兜底）与默认提示词。"""
 from sqlalchemy import func
 
-from .models import (FactAdPerf, FactSearchTerm, FactAba, FactListingDaily,
+from .models import (FactAdPerf, FactSearchTerm, FactAba, FactListingDaily, FactInventory,
                      KbKeyword, KbBidRule, KbCompetitor)
 from .metrics import aggregate, calc_metrics, period_totals
 
@@ -212,25 +212,79 @@ def run_rules(db, shop_id, d1, d2, target_acos=35.0, params=None):
             "evidence": ev("fact_ad_perf.summary.cvr", summary),
         })
 
-    # 6) 库存联动
-    inv = (db.query(func.sum(FactListingDaily.inventory), func.sum(FactListingDaily.units))
-           .filter(FactListingDaily.shop_id == shop_id,
-                   FactListingDaily.date >= d1, FactListingDaily.date <= d2).first())
-    if inv and inv[0]:
-        days = len(agg_camp["rows"] and [1] or [1])
-        daily_units = _safe_div(inv[1] or 0, max((d2 - d1).days + 1, 1))
-        cover = _safe_div(inv[0], daily_units or 1)
-        if 0 < cover < params.get("days_cover", 14):
+    # 6) 库存联动（基于 FactInventory 最新快照，逐 ASIN 联动广告）
+    inv_rows = (db.query(FactInventory)
+                .filter(FactInventory.shop_id == shop_id,
+                        FactInventory.date >= d1, FactInventory.date <= d2).all())
+    num_days = max((d2 - d1).days + 1, 1)
+    if inv_rows:
+        latest = {}
+        for r in inv_rows:
+            key = (r.shop_id, r.asin)
+            if key not in latest or r.date > latest[key].date:
+                latest[key] = r
+        ld = (db.query(FactListingDaily.asin, func.sum(FactListingDaily.units).label("units"))
+              .filter(FactListingDaily.shop_id == shop_id, FactListingDaily.date >= d1,
+                      FactListingDaily.date <= d2, FactListingDaily.asin != "")
+              .group_by(FactListingDaily.asin).all())
+        ld_units = {x.asin: (x.units or 0) for x in ld}
+        sd_asins = {a.associated_asin for a in db.query(FactAdPerf).filter(
+            FactAdPerf.shop_id == shop_id, FactAdPerf.associated_asin != "").all()}
+        threshold = params.get("days_cover", 14)
+        low, crit = [], []
+        for (sid, asin), rec in latest.items():
+            du = _safe_div(ld_units.get(asin, 0), num_days)
+            cover = (rec.days_of_cover if (rec.days_of_cover or 0) > 0
+                     else (_safe_div(rec.qty, du) if du else 0))
+            advertised = (ld_units.get(asin, 0) > 0) or (asin in sd_asins)
+            if 0 < cover < threshold:
+                entry = {"asin": asin, "qty": rec.qty, "inbound": rec.inbound,
+                         "cover": round(cover, 1), "advertised": advertised}
+                (crit if advertised else low).append(entry)
+        if crit:
+            worst = min(crit, key=lambda x: x["cover"])
             items.append({
-                "dimension": "inventory", "priority": "P0", "confidence": 0.88,
-                "title": f"库存仅可支撑约 {round(cover, 1)} 天（日均 {round(daily_units, 1)} 件）",
-                "detail": f"期间库存合计 {int(inv[0])} 件，销量 {int(inv[1] or 0)} 件。",
-                "action": "立即下调高效活动预算 20~30% 避免断货期空烧；同步安排补货，"
-                          "到货前把预算倾斜给库存充足的 ASIN。",
+                "dimension": "inventory", "priority": "P0", "confidence": 0.9,
+                "title": f"{len(crit)} 个在投 ASIN 库存告急，仅可支撑 {worst['cover']}~"
+                         f"{max(x['cover'] for x in crit)} 天",
+                "detail": "、".join(f"{c['asin']}(剩{c['qty']}件/{c['cover']}天，在途{c['inbound']})"
+                                    for c in sorted(crit, key=lambda x: x["cover"])[:6]),
+                "action": "立即下调这些 ASIN 对应活动预算 20~30% 避免断货期空烧；"
+                          "同步安排补货，到货前把预算倾斜给库存充足的 ASIN。",
                 "expected_impact": "避免断货导致的排名与权重损失（恢复成本通常为断货期广告费的 3~5 倍）",
-                "evidence": ev("fact_listing_daily.inventory / daily_units",
-                               {"inventory": int(inv[0]), "units": int(inv[1] or 0), "cover_days": round(cover, 1)}),
+                "evidence": ev("fact_inventory + fact_listing_daily.asin[days_cover<14 & advertised]",
+                               {"threshold": threshold, "critical": crit[:6]}),
             })
+        if low:
+            items.append({
+                "dimension": "inventory", "priority": "P2", "confidence": 0.8,
+                "title": f"{len(low)} 个 ASIN 可售天数低于 {threshold} 天（暂无在投广告）",
+                "detail": "、".join(f"{x['asin']}(剩{x['qty']}件/{x['cover']}天)" for x in low[:6]),
+                "action": "虽无在投广告，仍建议提前补货以防旺季断货；可在到货后再启动投放。",
+                "expected_impact": "维持可售率，避免有单无货",
+                "evidence": ev("fact_inventory[days_cover<14 & not advertised]",
+                               {"threshold": threshold, "low": low[:6]}),
+            })
+    else:
+        # 回退：仅业务报告库存总量时的粗估（兼容未上传库存报表的场景）
+        inv = (db.query(func.sum(FactListingDaily.inventory), func.sum(FactListingDaily.units))
+               .filter(FactListingDaily.shop_id == shop_id,
+                       FactListingDaily.date >= d1, FactListingDaily.date <= d2).first())
+        if inv and inv[0]:
+            daily_units = _safe_div(inv[1] or 0, num_days)
+            cover = _safe_div(inv[0], daily_units or 1)
+            if 0 < cover < params.get("days_cover", 14):
+                items.append({
+                    "dimension": "inventory", "priority": "P0", "confidence": 0.85,
+                    "title": f"库存仅可支撑约 {round(cover, 1)} 天（日均 {round(daily_units, 1)} 件）",
+                    "detail": f"期间库存合计 {int(inv[0])} 件，销量 {int(inv[1] or 0)} 件。",
+                    "action": "立即下调高效活动预算 20~30% 避免断货期空烧；同步安排补货，"
+                              "到货前把预算倾斜给库存充足的 ASIN。",
+                    "expected_impact": "避免断货导致的排名与权重损失（恢复成本通常为断货期广告费的 3~5 倍）",
+                    "evidence": ev("fact_listing_daily.inventory / daily_units",
+                                   {"inventory": int(inv[0]), "units": int(inv[1] or 0),
+                                    "cover_days": round(cover, 1)}),
+                })
 
     # 7) 结构风险：花费集中
     if agg_camp["rows"] and summary["spend"]:

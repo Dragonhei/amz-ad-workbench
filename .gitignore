@@ -47,3 +47,4 @@ vite.config.js.timestamp-*.mjs
 *.timestamp-*.mjs
 *.mjs.timestamp*
 .vitebuild/
+.workbuddy/

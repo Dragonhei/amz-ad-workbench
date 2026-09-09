@@ -54,12 +54,12 @@
 - **前端**：行动项「执行并回填」按钮；复盘前后对比图（执行日前后区间叠加）。
 - **验收**：标记执行后能看到前后指标 diff 与提升幅度。工作量 **M**。
 
-### P1-6 库存联动预警
+### P1-6 库存联动预警 ✅ 已完成
 - **目标**：低库存 / 可售天数不足时联动广告预警（建议降预算或暂停）。
-- **数据模型**：新增 `FactInventory`(shop_id, asin, date, qty, inbound, days_of_cover)；或扩展 `FactListingDaily` 加库存列。
-- **后端**：库存报表接入（`detect_type` 新类型）；分析告警规则（`days_of_cover < 阈值` 且该 ASIN 有花费 → 警告）。
-- **前端**：库存 Widget + 预警徽标；分析页低库存提示。
-- **验收**：上传库存表后，低库存 ASIN 在分析中被判为预警。工作量 **M**。
+- **数据模型**：新增 `FactInventory`(shop_id, asin, date, sku, qty, inbound, daily_sales, days_of_cover)，含 `shop_id+date`、`shop_id+asin` 索引；旧库经 `Base.metadata.create_all` 自动建表。
+- **后端**：`parsers.detect_type` 增加 INV 指纹（inbound / days of cover 决定性 +10；asin+可售且无广告指标 +5；文件名 inventory/inv_ 提示），字段别名与 canonical 集扩展；`ingest.commit` 落库 6 列；新增 `GET /api/inventory?shop_id=&marketplace=&threshold=` 返回每 ASIN 最新快照、可售天数、low_stock/advertised 标记与汇总；`rules.run_rules` 第 6 节改为逐 ASIN 计算可售天数，在投 ASIN 低库存 → P0 库存告警、其余 → P2，无库存报表时回退业务报告总量粗估。
+- **前端**：新增「库存预警」页（ASIN 快照表 + 阈值可调 + 低库存红标）；工作台（Dashboard）增加库存告急告警条；AI 分析页在存在库存 P0 时显示横幅。
+- **验收**：`samples/inventory_report.csv` 随 3 店铺灌库；e2e 5d 节覆盖 INV 识别、看板低库存汇总、在投告急 ASIN、阈值可调、分析库存 P0 告警。全量 **53/53 通过**。工作量 **M**（已完成）。
 
 ---
 

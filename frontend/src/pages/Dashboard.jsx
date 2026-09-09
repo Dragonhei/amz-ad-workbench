@@ -33,12 +33,16 @@ export default function Dashboard() {
   const [jobs, setJobs] = useState([])
   const [runs, setRuns] = useState([])
   const [usage, setUsage] = useState(null)
+  const [inv, setInv] = useState(null)
   const [err, setErr] = useState('')
 
   useEffect(() => {
     setErr('')
     api.get(`/bi/overview?shop_id=${shopId}`).then((r) => setOv(r.data)).catch((e) => setErr(e.message))
     api.get(`/ingest/jobs?shop_id=${shopId}&limit=6`).then((r) => setJobs(r.data.items)).catch(() => {})
+    const qs = new URLSearchParams()
+    if (shopId) qs.set('shop_id', shopId)
+    api.get(`/inventory?${qs.toString()}`).then((r) => setInv(r.data.summary)).catch(() => {})
     api.get(`/analysis/runs?shop_id=${shopId}&limit=1`).then(async (r) => {
       const first = r.data.items?.[0]
       if (first) {
@@ -55,6 +59,13 @@ export default function Dashboard() {
   return (
     <div>
       {err && <Alert type="warning" showIcon message="暂无数据" description={`${err}。请先在「数据投喂」上传报表。`} style={{ marginBottom: 12 }} />}
+
+      {inv && (inv.low_count || 0) > 0 && (
+        <Alert type="error" showIcon style={{ marginBottom: 12 }}
+          message={`${inv.low_count} 个 ASIN 库存告急（其中 ${inv.advertised_low || 0} 个在投广告）`}
+          description={<span>可售天数低于 14 天，建议下调预算并补货。
+            <Button type="link" size="small" style={{ padding: '0 4px' }} onClick={() => nav('/inventory')}>查看库存看板</Button></span>} />
+      )}
 
       <Card size="small" className="wb-card" title="近 30 天核心指标"
             extra={<span className="wb-muted">{ov?.period?.[0]} ~ {ov?.period?.[1]}</span>}>

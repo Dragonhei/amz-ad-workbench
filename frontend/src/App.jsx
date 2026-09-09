@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { Layout, Menu, Select, Space, Tag, Avatar, message } from 'antd'
 import {
   DashboardOutlined, CloudUploadOutlined, RobotOutlined, BarChartOutlined,
-  BookOutlined, RocketOutlined, TeamOutlined,
+  BookOutlined, RocketOutlined, TeamOutlined, DatabaseOutlined,
 } from '@ant-design/icons'
 import api from './api.js'
 import Dashboard from './pages/Dashboard.jsx'
@@ -12,6 +12,7 @@ import Analysis from './pages/Analysis.jsx'
 import Bi from './pages/Bi.jsx'
 import Knowledge from './pages/Knowledge.jsx'
 import Launch from './pages/Launch.jsx'
+import Inventory from './pages/Inventory.jsx'
 import Admin from './pages/Admin.jsx'
 
 const { Sider, Header, Content } = Layout
@@ -24,6 +25,7 @@ const MENU = [
   { key: '/analysis', icon: <RobotOutlined />, label: 'AI 分析' },
   { key: '/bi', icon: <BarChartOutlined />, label: 'BI 看板' },
   { key: '/kb', icon: <BookOutlined />, label: '知识库' },
+  { key: '/inventory', icon: <DatabaseOutlined />, label: '库存预警' },
   { key: '/launch', icon: <RocketOutlined />, label: '新品冷启动' },
   { key: '/admin', icon: <TeamOutlined />, label: '用户与配额' },
 ]
@@ -99,6 +101,7 @@ function Shell() {
               <Route path="/analysis" element={<Analysis />} />
               <Route path="/bi" element={<Bi />} />
               <Route path="/kb" element={<Knowledge />} />
+              <Route path="/inventory" element={<Inventory />} />
               <Route path="/launch" element={<Launch />} />
               <Route path="/admin" element={<Admin />} />
               <Route path="*" element={<Navigate to="/" replace />} />
