@@ -22,6 +22,7 @@ export default function Analysis() {
   const [targetAcos, setTargetAcos] = useState(35)
   const [providerId, setProviderId] = useState(null)
   const [useLlm, setUseLlm] = useState(true)
+  const [notifyOnRun, setNotifyOnRun] = useState(false)
   const [runs, setRuns] = useState([])
   const [items, setItems] = useState([])
   const [meta, setMeta] = useState({})
@@ -119,6 +120,7 @@ export default function Analysis() {
         start: range?.[0]?.format('YYYY-MM-DD') || '',
         end: range?.[1]?.format('YYYY-MM-DD') || '',
         target_acos: targetAcos, provider_id: providerId, use_llm: useLlm,
+        notify: notifyOnRun,
       })
       setItems(r.data.items)
       setMeta({ mode: r.data.mode, message: r.data.message, tokens: r.data.tokens, cost: r.data.cost })
@@ -244,6 +246,11 @@ export default function Analysis() {
                   <span className="wb-muted">启用大模型</span>
                   <Switch checked={useLlm} onChange={setUseLlm} />
                   <span className="wb-muted">（关闭则只用内置规则引擎）</span>
+                </Space>
+                <Space>
+                  <span className="wb-muted">运行并推送告警</span>
+                  <Switch checked={notifyOnRun} onChange={setNotifyOnRun} />
+                  <span className="wb-muted">（勾选后把 P0/P1 结论推送至启用渠道）</span>
                 </Space>
                 <Button type="primary" block icon={<ThunderboltOutlined />} loading={loading} onClick={run}>
                   运行分析，生成 12 维行动方案

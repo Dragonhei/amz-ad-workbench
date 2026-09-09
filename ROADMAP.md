@@ -82,9 +82,12 @@
 - **后端**：`/api/analysis/run` 支持多 `provider_id`，存每模型 ActionItem 集。
 - **前端**：对比视图（diff 高亮）。工作量 **M**。
 
-### P2-3 告警推送
-- **目标**：预警推送到邮件 / Webhook / 钉钉 / 企业微信 / Slack。
-- **后端**：通知渠道配置 + 调度器，复用 P1 的告警产出。工作量 **M**。
+### P2-3 告警推送 ✅
+- **目标**：把高优（P0/P1）告警推送到 Webhook / 邮件 / 钉钉 / 企业微信 / Slack。
+- **数据模型**：`NotificationChannel`(shop_id/name/chan_type/config_json/enabled) + `AlertDispatch`(run_id/channel_id/shop_id/priority_levels/item_count/status/detail/sent_at) 推送审计。
+- **后端**：`routers/notify.py` — 渠道 CRUD（`/api/notify/channels`）+ 测试推送（`/api/notify/test`）+ 推送历史（`/api/notify/logs`）；`dispatch_alerts` 在「运行分析」勾选 `notify` 后，把 P0/P1 项推送到所有启用渠道并写审计。Webhook 用标准库 POST 真实外发，`loopback://` 前缀用于本地模拟（不实际请求），邮件无 SMTP 时标记 simulated。
+- **前端**：`/notify` 通知中心（渠道配置 CRUD + 测试 + 推送历史）；分析页「运行并推送告警」开关。
+- **验收**：e2e 6e 节 7 项（建渠道→运行分析带 notify→推送成功记录→测试推送→列表/删除），全量 95/95 通过。工作量 **M**。
 
 ### P2-4 协作评论 ✅
 - **目标**：行动项 / 分析 / 活动下评论协作，把"讨论"直接挂在结论上。

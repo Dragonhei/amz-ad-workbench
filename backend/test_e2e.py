@@ -327,6 +327,42 @@ left = r.json()["items"]
 check("级联删除：主评论与其回复均消失",
       not any(x["id"] == cid for x in left) and not any(x["id"] == rid for x in left))
 
+print("\n=== 6e. 告警推送 (P2-3) ===")
+# 1) 创建 loopback webhook 渠道（本地模拟，不实际外发）
+rc = c.post("/api/notify/channels", headers=H, json={
+    "name": "测试机器人", "chan_type": "webhook", "shop_id": 1,
+    "config": {"url": "loopback://test"}, "enabled": True}).json()
+check("创建通知渠道", rc.get("ok") is True and rc.get("id"), f"id={rc.get('id')}")
+chid = rc.get("id")
+
+# 2) 运行分析并触发推送（规则引擎确保产出告警，use_llm=False 避免命中 LLM 缓存分支）
+r = c.post("/api/analysis/run", headers=H, json={"shop_id": 1, "use_llm": False, "notify": True})
+res = r.json()
+check("分析运行成功", r.status_code == 200, f"mode={res.get('mode')}")
+has_high = any(i.get("priority") in ("P0", "P1") for i in res.get("items", []))
+check("高优告警推送逻辑正确",
+      (has_high and res.get("notify_sent", 0) >= 1) or (not has_high and res.get("notify_sent", 0) == 0),
+      f"has_high={has_high}, notify_sent={res.get('notify_sent')}")
+
+# 3) 推送历史可查
+logs = c.get("/api/notify/logs", headers=H).json()["items"]
+mine = [l for l in logs if l["channel_id"] == chid]
+if has_high:
+    check("推送历史含成功记录", any(l["status"] == "success" for l in mine),
+          f"mine={len(mine)}, statuses={[l['status'] for l in mine]}")
+else:
+    check("无高优告警时跳过推送（无记录）", len(mine) == 0, f"mine={len(mine)}")
+
+# 4) 测试推送接口（固定 P1 样本，loopback 必成功）
+rt = c.post("/api/notify/test", headers=H, json={"channel_id": chid}).json()
+check("测试推送返回 success", rt.get("status") == "success", f"status={rt.get('status')}")
+
+# 5) 渠道列表与删除
+ch_list = c.get("/api/notify/channels", headers=H).json()["items"]
+check("渠道列表含新建项", any(x["id"] == chid for x in ch_list))
+rd = c.delete(f"/api/notify/channels/{chid}", headers=H)
+check("删除渠道", rd.status_code == 200)
+
 print("\n=== 7. 知识库 ===")
 kw = c.get("/api/kb/keyword?shop_id=1").json()["items"]
 check("关键词库种子数据", len(kw) >= 10, f"{len(kw)} 条")

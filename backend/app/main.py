@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .db import Base, engine
 from .models import *          # noqa: F401,F403  建表需要
-from .routers import admin, analysis, bi, comments, ingest, inventory, kb, launch
+from .routers import admin, analysis, bi, comments, ingest, inventory, kb, launch, notify
 from .seed import seed_all
 
 app = FastAPI(title="AI 广告分析工作台", version="0.1.0")
@@ -22,6 +22,7 @@ app.include_router(inventory.router)
 app.include_router(kb.router)
 app.include_router(launch.router)
 app.include_router(comments.router)
+app.include_router(notify.router)
 app.include_router(admin.router)
 
 DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),

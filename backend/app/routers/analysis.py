@@ -206,6 +206,7 @@ class RunIn(BaseModel):
     target_acos: float = 35.0
     provider_id: Optional[int] = None
     use_llm: bool = True
+    notify: bool = False          # P2-3：运行完成后把 P0/P1 告警推送到启用的渠道
 
 
 def _build_context(db, shop_id, d1, d2, target_acos):
@@ -302,6 +303,7 @@ def run(body: RunIn, db: Session = Depends(get_db), u: User = Depends(current_us
     db.add(run_obj)
     db.flush()
 
+    item_objs = []
     for it in items:
         item = ActionItem(run_id=run_obj.id, dimension=it["dimension"], title=it["title"],
                           detail=it.get("detail", ""), action=it.get("action", ""),
@@ -310,6 +312,7 @@ def run(body: RunIn, db: Session = Depends(get_db), u: User = Depends(current_us
                           confidence=float(it.get("confidence", 0.6)))
         db.add(item)
         db.flush()
+        item_objs.append(item)
         evs = it.get("evidence") or []
         if isinstance(evs, dict):
             evs = [evs]
@@ -323,9 +326,18 @@ def run(body: RunIn, db: Session = Depends(get_db), u: User = Depends(current_us
                     prompt_tokens=pt, completion_tokens=ct, cost=cost,
                     status="success" if not err_msg else "degraded", message=err_msg))
     db.commit()
+
+    # P2-3：运行完成后把 P0/P1 级告警推送到启用的通知渠道
+    notify_sent = 0
+    if body.notify:
+        from ..routers.notify import dispatch_alerts
+        recs = dispatch_alerts(db, run_obj.id, item_objs, body.shop_id)
+        notify_sent = len(recs)
+
     return {"run_id": run_obj.id, "mode": mode, "cached": False,
             "message": err_msg or ("大模型分析完成" if mode == "llm" else "使用内置规则引擎（未启用模型或调用失败）"),
-            "tokens": pt + ct, "cost": cost, "items": _items_of(db, run_obj.id)}
+            "tokens": pt + ct, "cost": cost, "notify_sent": notify_sent,
+            "items": _items_of(db, run_obj.id)}
 
 
 def _items_of(db, run_id):

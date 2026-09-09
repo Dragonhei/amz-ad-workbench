@@ -494,3 +494,33 @@ class LaunchExport(Base):
     file_path = Column(String(512), default="")
     row_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------- 告警推送（P2-3）
+class NotificationChannel(Base):
+    """可插拔的通知渠道：Webhook / 邮件 / 钉钉 / 企业微信 / Slack。"""
+    __tablename__ = "notification_channel"
+    id = Column(Integer, primary_key=True)
+    shop_id = Column(Integer, default=1)
+    name = Column(String(128), nullable=False)
+    chan_type = Column(String(16), default="webhook")   # webhook|email|dingtalk|wecom|slack
+    config_json = Column(Text, default="{}")            # {"url": "...", "recipients": "..."}
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=utcnow)
+    __table_args__ = (Index("ix_notify_shop", "shop_id"),)
+
+
+class AlertDispatch(Base):
+    """一次告警推送记录（可审计、可追溯）。"""
+    __tablename__ = "alert_dispatch"
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, nullable=True)
+    channel_id = Column(Integer, nullable=True)
+    shop_id = Column(Integer, default=1)
+    priority_levels = Column(String(32), default="P0,P1")
+    item_count = Column(Integer, default=0)
+    status = Column(String(16), default="success")      # success|failed|simulated
+    detail = Column(Text, default="")                   # 响应片段或错误
+    sent_at = Column(DateTime, default=utcnow)
+    __table_args__ = (Index("ix_dispatch_shop", "shop_id"),
+                      Index("ix_dispatch_run", "run_id"))

@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { Layout, Menu, Select, Space, Tag, Avatar, message } from 'antd'
 import {
   DashboardOutlined, CloudUploadOutlined, RobotOutlined, BarChartOutlined,
-  BookOutlined, RocketOutlined, TeamOutlined, DatabaseOutlined,
+  BookOutlined, RocketOutlined, TeamOutlined, DatabaseOutlined, NotificationOutlined,
 } from '@ant-design/icons'
 import api from './api.js'
 import Dashboard from './pages/Dashboard.jsx'
@@ -14,6 +14,7 @@ import Knowledge from './pages/Knowledge.jsx'
 import Launch from './pages/Launch.jsx'
 import Inventory from './pages/Inventory.jsx'
 import Admin from './pages/Admin.jsx'
+import Notify from './pages/Notify.jsx'
 
 const { Sider, Header, Content } = Layout
 export const Ctx = createContext({ shopId: 1, user: 'admin', role: 'admin' })
@@ -28,6 +29,7 @@ const MENU = [
   { key: '/inventory', icon: <DatabaseOutlined />, label: '库存预警' },
   { key: '/launch', icon: <RocketOutlined />, label: '新品冷启动' },
   { key: '/admin', icon: <TeamOutlined />, label: '用户与配额' },
+  { key: '/notify', icon: <NotificationOutlined />, label: '告警推送' },
 ]
 
 function Shell() {
@@ -104,6 +106,7 @@ function Shell() {
               <Route path="/inventory" element={<Inventory />} />
               <Route path="/launch" element={<Launch />} />
               <Route path="/admin" element={<Admin />} />
+              <Route path="/notify" element={<Notify />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Content>
