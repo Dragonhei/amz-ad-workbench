@@ -291,6 +291,42 @@ if items3:
     check("已执行项在分析中标记 executed", any(i.get("executed") for i in rerun) if rerun else True,
           f"executed={rerun[0].get('executed') if rerun else 'n/a'}")
 
+print("\n=== 6d. 协作评论 (P2-4) ===")
+# 取一个行动项用于评论（跑一次分析确保有项）
+r = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False}, headers=H)
+items6d = r.json().get("items", [])
+iid = items6d[0]["id"] if items6d else None
+check("存在行动项用于评论", iid is not None, f"items={len(items6d)}")
+
+r = c.post("/api/comment", json={"entity_type": "action_item", "entity_id": iid,
+                                 "text": "这条建议很实用，先小范围试一下", "shop_id": 1}, headers=H)
+check("发表评论", r.status_code == 200 and r.json().get("ok"), r.text[:80])
+cid = r.json().get("id")
+
+r = c.get(f"/api/comment?entity_type=action_item&entity_id={iid}", headers=H)
+cmts = r.json()["items"]
+check("评论列表含新评论", any(x["id"] == cid for x in cmts) and len(cmts) >= 1)
+check("评论含作者信息", any(x["username"] for x in cmts), f"username={cmts[0]['username'] if cmts else '-'}")
+
+r = c.put(f"/api/comment/{cid}", json={"text": "修改后：先小范围验证再全量"}, headers=H)
+check("编辑评论", r.status_code == 200)
+r = c.get(f"/api/comment?entity_type=action_item&entity_id={iid}", headers=H)
+check("编辑生效", any(x["id"] == cid and x["text"].startswith("修改后") for x in r.json()["items"]))
+
+r = c.post("/api/comment", json={"entity_type": "action_item", "entity_id": iid,
+                                 "text": "同意，我也试试", "shop_id": 1, "parent_id": cid}, headers=H)
+check("回复评论", r.status_code == 200)
+rid = r.json().get("id")
+r = c.get(f"/api/comment?entity_type=action_item&entity_id={iid}", headers=H)
+check("回复出现在列表", any(x["id"] == rid and x["parent_id"] == cid for x in r.json()["items"]))
+
+r = c.delete(f"/api/comment/{cid}", headers=H)
+check("删除评论", r.status_code == 200)
+r = c.get(f"/api/comment?entity_type=action_item&entity_id={iid}", headers=H)
+left = r.json()["items"]
+check("级联删除：主评论与其回复均消失",
+      not any(x["id"] == cid for x in left) and not any(x["id"] == rid for x in left))
+
 print("\n=== 7. 知识库 ===")
 kw = c.get("/api/kb/keyword?shop_id=1").json()["items"]
 check("关键词库种子数据", len(kw) >= 10, f"{len(kw)} 条")

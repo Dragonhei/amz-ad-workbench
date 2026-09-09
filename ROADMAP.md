@@ -86,11 +86,12 @@
 - **目标**：预警推送到邮件 / Webhook / 钉钉 / 企业微信 / Slack。
 - **后端**：通知渠道配置 + 调度器，复用 P1 的告警产出。工作量 **M**。
 
-### P2-4 协作评论
-- **目标**：行动项 / 分析 / 活动下评论协作。
-- **数据模型**：新增 `Comment`(entity_type, entity_id, user_id, text, created_at)。
-- **后端**：`/api/comment` CRUD。
-- **前端**：评论线程组件。工作量 **S/M**。
+### P2-4 协作评论 ✅
+- **目标**：行动项 / 分析 / 活动下评论协作，把"讨论"直接挂在结论上。
+- **数据模型**：新增 `Comment`(entity_type, entity_id, shop_id, user_id, parent_id, text, created_at) + 实体索引；支持一级回复（parent_id）。
+- **后端**：`routers/comments.py` — `GET /api/comment`（按实体列出，含作者用户名/时间，时间升序）、`POST`（发表/回复，shop_id 权限校验）、`PUT`（改自己）、`DELETE`（删自己 + 级联删回复）。
+- **前端**：`components/Comments.jsx` 可复用评论线程组件（发表 + 一级回复 + 删除自己的评论）；已挂载到「分析」页行动项「结论依据」抽屉（entityType=action_item）。
+- **验收**：e2e 6d 节 10 项（发表 / 列表 / 作者信息 / 编辑生效 / 回复 / 删除级联），全量 88/88 通过。工作量 **S/M**。
 
 ---
 

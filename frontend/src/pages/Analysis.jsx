@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
   Card, Row, Col, Button, Space, Tag, Table, Modal, Form, Input, InputNumber, Switch,
-  Select, Tabs, Alert, Drawer, message, DatePicker, Popconfirm, Empty, Progress,
+  Select, Tabs, Alert, Drawer, message, DatePicker, Popconfirm, Empty, Progress, Divider,
 } from 'antd'
 import { ThunderboltOutlined, ExperimentOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import ReactECharts from 'echarts-for-react'
 import api from '../api.js'
 import { useCtx } from '../App.jsx'
+import Comments from '../components/Comments.jsx'
 
 const { TextArea } = Input
 
@@ -488,13 +489,15 @@ export default function Analysis() {
             <div style={{ fontWeight: 500, marginBottom: 8 }}>{evItem.title}</div>
             {(evItem.evidence || []).length === 0 && <Empty description="该结论由大模型给出但未附带结构化证据" />}
             {(evItem.evidence || []).map((e, idx) => (
-              <Card key={idx} size="small" style={{ marginBottom: 8 }} title={
+              <              Card key={idx} size="small" style={{ marginBottom: 8 }} title={
                 <code style={{ fontSize: 12 }}>{e.metric_path || 'evidence'}</code>}>
                 <pre className="wb-pre">{typeof e.snapshot === 'string'
                   ? (() => { try { return JSON.stringify(JSON.parse(e.snapshot), null, 2) } catch { return e.snapshot } })()
                   : JSON.stringify(e.snapshot, null, 2)}</pre>
               </Card>
             ))}
+            <Divider orientation="left" style={{ margin: '12px 0 8px', fontSize: 13 }}>讨论</Divider>
+            <Comments entityType="action_item" entityId={evItem.id} />
           </>
         )}
       </Drawer>

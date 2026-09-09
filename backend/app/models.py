@@ -71,6 +71,20 @@ class AuditLog(Base):
     detail = Column(Text, default="")
 
 
+class Comment(Base):
+    __tablename__ = "comment"
+    id = Column(Integer, primary_key=True)
+    entity_type = Column(String(32), default="action_item")   # action_item|analysis_run|knowledge|activity
+    entity_id = Column(Integer, default=0)
+    shop_id = Column(Integer, default=0)
+    user_id = Column(Integer, ForeignKey("user.id"))
+    parent_id = Column(Integer, nullable=True)                # 一级回复
+    text = Column(Text, default="")
+    created_at = Column(DateTime, default=utcnow)
+
+    __table_args__ = (Index("ix_comment_entity", "entity_type", "entity_id"),)
+
+
 # ---------------------------------------------------------------- 接入层
 class SourceFile(Base):
     __tablename__ = "source_file"
