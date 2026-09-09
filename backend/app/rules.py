@@ -2,7 +2,7 @@
 from sqlalchemy import func
 
 from .models import (FactAdPerf, FactSearchTerm, FactAba, FactListingDaily, FactInventory,
-                     KbKeyword, KbBidRule, KbCompetitor, KbRankTrack)
+                     KbKeyword, KbBidRule, KbCompetitor, KbRankTrack, AnalysisRule)
 from .metrics import aggregate, calc_metrics, period_totals
 
 DIMENSIONS = [
@@ -439,8 +439,27 @@ def run_rules(db, shop_id, d1, d2, target_acos=35.0, params=None):
                                     for d in sorted(dropped, key=lambda x: -x["delta"])[:6]),
                 "action": "排名下跌的词优先排查：① 差评/价格/库存是否恶化；② 加大该词精准投放与优惠券；"
                           "③ 若为广告位原因，搜索结果顶部加价；④ 用 SD 商品定向拦截竞品流量。",
-                "expected_impact": "稳住核心词排名，避免自然流量与转化持续流失",
-                "evidence": ev("kb_rank_track[organic_rank vs last week drop>=%d]" % params.get("rank_drop", 5),
-                               {"threshold": params.get("rank_drop", 5), "dropped": dropped[:6]}),
-            })
+            "expected_impact": "稳住核心词排名，避免自然流量与转化持续流失",
+            "evidence": ev("kb_rank_track[organic_rank vs last week drop>=%d]" % params.get("rank_drop", 5),
+                           {"threshold": params.get("rank_drop", 5), "dropped": dropped[:6]}),
+        })
+
+    # 15) 自定义 DSL 规则（P1-4 规则可视化）：加载启用的、含有效 dsl_text 的规则并求值
+    from . import dsl as dsl_mod
+    dsl_rules = (db.query(AnalysisRule)
+                 .filter(AnalysisRule.enabled.is_(True), AnalysisRule.dsl_text != "")
+                 .all())
+    for r in dsl_rules:
+        parsed = dsl_mod.parse_dsl(r.dsl_text or "")
+        errs = dsl_mod.validate_rule(parsed)
+        if errs:
+            continue  # 语法/语义不合法的规则静默跳过，不影响其它结论
+        parsed["name"] = r.name_zh or r.code
+        try:
+            hit = dsl_mod.evaluate_rule(db, shop_id, d1, d2, parsed, target_acos)
+        except Exception:
+            continue
+        if hit:
+            items.extend(hit)
+
     return items

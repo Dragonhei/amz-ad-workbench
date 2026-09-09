@@ -43,6 +43,11 @@ def _ensure_schema(db: Session):
             db.execute(text(f"ALTER TABLE kb_rank_track ADD COLUMN {col} {ctype} DEFAULT ''"))
     if any(col not in rank_cols for col, _ in (("marketplace", ""), ("rank_source", ""))):
         db.commit()
+    # P1-4：analysis_rule 补齐 dsl_text 列（旧库升级兼容）
+    rule_cols = {r[1] for r in db.execute(text("PRAGMA table_info(analysis_rule)")).fetchall()}
+    if "dsl_text" not in rule_cols:
+        db.execute(text("ALTER TABLE analysis_rule ADD COLUMN dsl_text TEXT DEFAULT ''"))
+        db.commit()
 
 
 SEED_KEYWORDS = [
@@ -93,6 +98,34 @@ def seed_all(db: Session = None):
                 db.add(AnalysisRule(code=r["code"], name_zh=r["name_zh"], dimension=r["dimension"],
                                     condition_json=r["condition_json"],
                                     advice_template=r["advice_template"]))
+        # P1-4：示例 DSL 规则（可视化规则引擎）。dsl_text 为空则代表属于内置 JSON 条件规则。
+        SEED_DSL_RULES = [
+            {
+                # 当任意广告活动的 ACOS 超过 40% 时，给出竞价下调建议（中优先级，竞价调整维度）
+                "code": "dsl_acos_campaign_high",
+                "name_zh": "活动 ACOS 超阈值（DSL 示例）",
+                "dimension": "bid",
+                "dsl_text": 'WHEN acos > 40 FOR campaign THEN SUGGEST bid "活动「{scope}」ACOS 达 {value}%，'
+                            '超过 {threshold}%，建议分两次下调竞价各 10~15%" WITH SEVERITY mid',
+                "advice_template": "",
+                "priority": 5,
+            },
+            {
+                # 当任意关键词 CTR 低于 0.2% 时，给出 Listing 优化建议（低优先级，Listing 维度）
+                "code": "dsl_ctr_keyword_low",
+                "name_zh": "关键词 CTR 偏低（DSL 示例）",
+                "dimension": "listing",
+                "dsl_text": 'WHEN ctr < 0.2 FOR keyword THEN SUGGEST listing "关键词「{scope}」CTR 仅 {value}%，'
+                            '低于 {threshold}%，优先优化主图与标题" WITH SEVERITY low',
+                "advice_template": "",
+                "priority": 5,
+            },
+        ]
+        for r in SEED_DSL_RULES:
+            if not db.query(AnalysisRule).filter(AnalysisRule.code == r["code"]).first():
+                db.add(AnalysisRule(code=r["code"], name_zh=r["name_zh"], dimension=r["dimension"],
+                                    condition_json="{}", dsl_text=r["dsl_text"],
+                                    advice_template=r["advice_template"], priority=r["priority"]))
         if not db.query(PromptTemplate).filter(PromptTemplate.code == "default").first():
             db.add(PromptTemplate(code="default", name_zh="12 维分析提示词", content=DEFAULT_PROMPT))
         if not db.query(LlmProvider).first():

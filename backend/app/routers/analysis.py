@@ -18,6 +18,7 @@ from ..models import (ActionItem, AnalysisRun, Evidence, FactAba, FactSearchTerm
                       KbBidRule, KbKeyword, LlmProvider, PromptTemplate,
                       Shop, UsageLog, User, AnalysisRule)
 from ..rules import DEFAULT_PROMPT, DEFAULT_RULES, DIMENSIONS, run_rules
+from ..dsl import dsl_meta, check_dsl
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 PRICE_IN = 0.15 / 1_000_000
@@ -94,7 +95,8 @@ def list_rules(db: Session = Depends(get_db), u: User = Depends(current_user)):
     rows = db.query(AnalysisRule).all()
     return {"items": [{"id": r.id, "code": r.code, "name_zh": r.name_zh, "dimension": r.dimension,
                        "condition": json.loads(r.condition_json or "{}"), "priority": r.priority,
-                       "enabled": r.enabled, "advice_template": r.advice_template} for r in rows]}
+                       "enabled": r.enabled, "advice_template": r.advice_template,
+                       "dsl_text": r.dsl_text or ""} for r in rows]}
 
 
 class RuleIn(BaseModel):
@@ -103,6 +105,7 @@ class RuleIn(BaseModel):
     condition: Optional[dict] = None
     priority: Optional[int] = None
     advice_template: Optional[str] = None
+    dsl_text: Optional[str] = None
 
 
 @router.put("/rules/{rid}")
@@ -116,10 +119,56 @@ def update_rule(rid: int, body: RuleIn, db: Session = Depends(get_db), u: User =
         r.condition_json = json.dumps(body.condition, ensure_ascii=False)
     if body.priority is not None:
         r.priority = body.priority
-    if body.advice_template:
+    if body.advice_template is not None:
         r.advice_template = body.advice_template
+    if body.dsl_text is not None:
+        r.dsl_text = body.dsl_text
     db.commit()
     return {"ok": True}
+
+
+class RuleCreateIn(BaseModel):
+    code: str
+    name_zh: str
+    dimension: str
+    dsl_text: str = ""
+    priority: int = 5
+    enabled: bool = True
+    advice_template: str = ""
+
+
+@router.post("/rules")
+def create_rule(body: RuleCreateIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    if db.query(AnalysisRule).filter(AnalysisRule.code == body.code).first():
+        raise HTTPException(400, f"规则代码 {body.code} 已存在")
+    r = AnalysisRule(code=body.code, name_zh=body.name_zh, dimension=body.dimension,
+                     dsl_text=body.dsl_text, priority=body.priority, enabled=body.enabled,
+                     advice_template=body.advice_template, condition_json="{}")
+    db.add(r)
+    db.commit()
+    return {"ok": True, "id": r.id}
+
+
+@router.delete("/rules/{rid}")
+def delete_rule(rid: int, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    r = db.query(AnalysisRule).get(rid)
+    if not r:
+        raise HTTPException(404, "规则不存在")
+    db.delete(r)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- DSL 可视化规则
+@router.get("/dsl/meta")
+def dsl_rule_meta():
+    return dsl_meta()
+
+
+@router.get("/dsl/validate")
+def dsl_validate(text: str = "", db: Session = Depends(get_db), u: User = Depends(current_user)):
+    res = check_dsl(text)
+    return {"ok": res["ok"], "errors": res["errors"], "parsed": res["parsed"]}
 
 
 @router.get("/dimensions")

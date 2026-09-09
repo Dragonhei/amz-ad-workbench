@@ -198,6 +198,52 @@ cached = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35,
                                            "use_llm": True}, headers=H).json()
 check("未配置 Key 时自动降级", cached["mode"] == "rule", cached.get("message", "")[:60])
 
+print("\n=== 6b. 规则可视化 DSL（P1-4）===")
+# DSL 元数据
+meta = c.get("/api/analysis/dsl/meta", headers=H).json()
+check("DSL meta 含指标/运算符/作用域/维度/严重度",
+      len(meta["metrics"]) >= 11 and len(meta["ops"]) >= 6 and len(meta["scopes"]) >= 7
+      and len(meta["dimensions"]) >= 12 and len(meta["severities"]) == 3,
+      f"指标 {len(meta['metrics'])} / 运算符 {len(meta['ops'])} / 作用域 {len(meta['scopes'])}")
+# 校验：合法 DSL
+good = ('WHEN acos > 40 FOR campaign THEN SUGGEST bid '
+        '"活动「{scope}」ACOS 达 {value}%" WITH SEVERITY mid')
+vg = c.get(f"/api/analysis/dsl/validate?text={quote(good)}", headers=H).json()
+check("合法 DSL 校验通过", vg["ok"] and not vg["errors"], str(vg.get("errors")))
+# 校验：非法指标应被拒绝
+bad = 'WHEN not_a_metric > 1 THEN bid "x"'
+vb = c.get(f"/api/analysis/dsl/validate?text={quote(bad)}", headers=H).json()
+check("非法指标 DSL 校验失败", (not vb["ok"]) and any("未知指标" in e for e in vb["errors"]),
+      str(vb.get("errors")))
+# 创建一条确定性会触发的规则（clicks > 0 FOR campaign，每个活动必有点击）
+create_name = "P1-4 验收规则"
+create_code = "dsl_e2e_clicks_campaign"
+cr = c.post("/api/analysis/rules", json={
+    "code": create_code, "name_zh": create_name, "dimension": "budget",
+    "dsl_text": 'WHEN clicks > 0 FOR campaign THEN SUGGEST budget '
+                '"活动「{scope}」点击量 {value}，建议复盘预算分配" WITH SEVERITY low',
+    "priority": 5, "enabled": True, "advice_template": "",
+}, headers=H).json()
+check("创建 DSL 规则", cr.get("ok") is True, f"id={cr.get('id')}")
+# 运行分析，断言自定义 DSL 规则命中并产出对应维度结论
+rr2 = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False},
+             headers=H).json()
+items2 = rr2.get("items", [])
+dsl_items = [i for i in items2 if i.get("title", "").startswith("规则「") and create_name in i.get("title", "")]
+check("DSL 规则在分析结论中命中", len(dsl_items) >= 1,
+      f"命中 {len(dsl_items)} 条，示例：{dsl_items[0]['title'][:60] if dsl_items else ''}")
+check("DSL 结论归属正确维度", any(i["dimension"] == "budget" for i in dsl_items),
+      "维度=" + (dsl_items[0]["dimension"] if dsl_items else "无"))
+check("DSL 结论带结构化证据", all(i.get("evidence") for i in dsl_items),
+      f"证据条数={sum(len(i['evidence']) for i in dsl_items)}")
+check("DSL 命中项含可点击采纳/驳回动作字段", all("status" in i for i in dsl_items))
+# 清理：删除该规则
+did = cr.get("id")
+dr = c.delete(f"/api/analysis/rules/{did}", headers=H).json()
+check("删除 DSL 规则", dr.get("ok") is True)
+rules_after = c.get("/api/analysis/rules", headers=H).json()["items"]
+check("规则列表中已移除", not any(r["id"] == did for r in rules_after), f"剩余 {len(rules_after)} 条")
+
 print("\n=== 7. 知识库 ===")
 kw = c.get("/api/kb/keyword?shop_id=1").json()["items"]
 check("关键词库种子数据", len(kw) >= 10, f"{len(kw)} 条")

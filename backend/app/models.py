@@ -291,6 +291,7 @@ class AnalysisRule(Base):
     priority = Column(Integer, default=5)
     enabled = Column(Boolean, default=True)
     advice_template = Column(Text, default="")
+    dsl_text = Column(Text, default="")         # P1-4 规则可视化 DSL 原文（WHEN...THEN...）
 
 
 class PromptTemplate(Base):

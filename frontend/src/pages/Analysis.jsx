@@ -29,6 +29,18 @@ export default function Analysis() {
   const [evItem, setEvItem] = useState(null)
   const [loading, setLoading] = useState(false)
 
+  // P1-4 规则可视化 DSL 构建器
+  const [dslMeta, setDslMeta] = useState({ metrics: [], ops: [], scopes: [], dimensions: [], severities: [] })
+  const [editingRule, setEditingRule] = useState(null)   // 正在编辑的自定义规则（含 DSL）
+  const [dsl, setDsl] = useState({
+    code: '', name_zh: '', dimension: 'bid', metric: 'acos', op: '>', threshold: 40,
+    scope: 'account', severity: 'mid', template: '',
+  })
+  const [dslPreview, setDslPreview] = useState('')
+  const [dslCheck, setDslCheck] = useState(null)         // {ok, errors, parsed}
+  const [dslSaving, setDslSaving] = useState(false)
+  const [tabKey, setTabKey] = useState('rules')
+
   const load = () => {
     api.get('/analysis/providers').then((r) => {
       setProviders(r.data.items)
@@ -37,6 +49,7 @@ export default function Analysis() {
     }).catch(() => {})
     api.get('/analysis/dimensions').then((r) => setDims(r.data.items)).catch(() => {})
     api.get('/analysis/rules').then((r) => setRules(r.data.items)).catch(() => {})
+    api.get('/analysis/dsl/meta').then((r) => setDslMeta(r.data)).catch(() => {})
     api.get('/analysis/prompt?code=default').then((r) => setPrompt(r.data.content)).catch(() => {})
     api.get(`/analysis/runs?shop_id=${shopId}`).then((r) => setRuns(r.data.items)).catch(() => {})
     api.get(`/bi/range?shop_id=${shopId}`).then((r) => {
@@ -90,6 +103,76 @@ export default function Analysis() {
     items.forEach((i) => { (g[i.dimension] = g[i.dimension] || []).push(i) })
     return g
   }, [items])
+
+  // P1-4：根据表单实时拼装 DSL 预览文本
+  const dslPreviewText = useMemo(() => {
+    const m = dslMeta.metrics.find((x) => x.code === dsl.metric) || {}
+    const u = m.unit || ''
+    const thr = u === '%' ? Number(dsl.threshold) : Number(dsl.threshold)
+    const scopePart = dsl.scope && dsl.scope !== 'account' ? ` FOR ${dsl.scope}` : ''
+    const sevPart = dsl.severity ? ` WITH SEVERITY ${dsl.severity}` : ''
+    const tpl = (dsl.template || '').replace(/"/g, "'")
+    return `WHEN ${dsl.metric} ${dsl.op} ${thr}${scopePart} THEN SUGGEST ${dsl.dimension} "${tpl}"${sevPart}`
+  }, [dsl, dslMeta])
+
+  const validateDsl = async () => {
+    try {
+      const r = await api.get(`/analysis/dsl/validate?text=${encodeURIComponent(dslPreviewText)}`)
+      setDslCheck(r.data)
+      if (r.data.ok) message.success('DSL 语法与语义校验通过')
+      else message.error('校验未通过：' + r.data.errors.join('；'))
+    } catch (e) { message.error(e.message) }
+  }
+
+  const saveDslRule = async () => {
+    if (!dsl.name_zh.trim()) { message.warning('请填写规则名称'); return }
+    if (!dsl.code.trim()) { message.warning('请填写规则代码'); return }
+    setDslSaving(true)
+    try {
+      if (editingRule) {
+        await api.put(`/analysis/rules/${editingRule.id}`, { dsl_text: dslPreviewText, enabled: editingRule.enabled })
+        message.success('规则已更新')
+      } else {
+        await api.post('/analysis/rules', {
+          code: dsl.code.trim(), name_zh: dsl.name_zh.trim(), dimension: dsl.dimension,
+          dsl_text: dslPreviewText, priority: 5, enabled: true, advice_template: '',
+        })
+        message.success('自定义规则已创建')
+      }
+      setEditingRule(null)
+      setDsl({ code: '', name_zh: '', dimension: 'bid', metric: 'acos', op: '>', threshold: 40,
+               scope: 'account', severity: 'mid', template: '' })
+      setDslCheck(null)
+      load()
+    } catch (e) { message.error(e.message) } finally { setDslSaving(false) }
+  }
+
+  const editRule = (r) => {
+    setEditingRule(r)
+    setDsl({
+      code: r.code, name_zh: r.name_zh, dimension: r.dimension || 'bid',
+      metric: 'acos', op: '>', threshold: 40, scope: 'account', severity: 'mid', template: '',
+    })
+    // 若已有 dsl_text，解析回填到表单（尽可能还原）
+    const txt = r.dsl_text || ''
+    const m = /WHEN\s+(\w+)\s*(>=|<=|==|!=|>|<)\s*([\d.]+)(?:\s+FOR\s+(\w+))?/.exec(txt)
+    if (m) {
+      setDsl((d) => ({
+        ...d, metric: m[1], op: m[2], threshold: parseFloat(m[3]),
+        scope: m[4] || 'account',
+      }))
+    }
+    const dim = /THEN\s+(?:SUGGEST\s+)?(\w+)\s+"/.exec(txt)
+    if (dim) setDsl((d) => ({ ...d, dimension: dim[1] }))
+    const tpl = /THEN\s+(?:SUGGEST\s+)?\w+\s+"(.*)"(?:\s+WITH SEVERITY\s+(\w+))?/.exec(txt)
+    if (tpl) setDsl((d) => ({ ...d, template: tpl[1].replace(/'/g, '"'), severity: tpl[2] || 'mid' }))
+    setDslCheck(null)
+  }
+
+  const deleteRule = async (rid) => {
+    try { await api.delete(`/analysis/rules/${rid}`); message.success('已删除'); load() }
+    catch (e) { message.error(e.message) }
+  }
 
   return (
     <div>
@@ -162,19 +245,91 @@ export default function Analysis() {
 
         <Col xs={24} lg={15}>
           <Card size="small" className="wb-card">
-            <Tabs items={[
+            <Tabs activeKey={tabKey} onChange={setTabKey} items={[
               { key: 'rules', label: '分析规则', children: (
                 <Table size="small" rowKey="id" pagination={false} dataSource={rules}
                        columns={[
-                         { title: '规则', dataIndex: 'name_zh', width: 160 },
-                         { title: '维度', dataIndex: 'dimension', width: 100, render: (v) => dimName[v] || v },
-                         { title: '触发条件', dataIndex: 'condition', render: (v) => (
-                           <code style={{ fontSize: 11 }}>{JSON.stringify(v)}</code>) },
-                         { title: '启用', dataIndex: 'enabled', width: 70, render: (v, r) => (
+                         { title: '规则', dataIndex: 'name_zh', width: 150 },
+                         { title: '维度', dataIndex: 'dimension', width: 90, render: (v) => dimName[v] || v },
+                         { title: '触发条件', render: (_, r) => (
+                           r.dsl_text
+                             ? <code style={{ fontSize: 11 }}>{r.dsl_text}</code>
+                             : <code style={{ fontSize: 11 }}>{JSON.stringify(r.condition)}</code>) },
+                         { title: '启用', dataIndex: 'enabled', width: 64, render: (v, r) => (
                            <Switch size="small" checked={v} onChange={(val) => {
                              api.put(`/analysis/rules/${r.id}`, { enabled: val }).then(load)
                            }} />) },
+                         { title: '操作', width: 110, render: (_, r) => (
+                           <Space size={2}>
+                             <Button type="link" size="small" onClick={() => { editRule(r); setTabKey('dsl') }}>编辑</Button>
+                             <Popconfirm title="确认删除该规则？" onConfirm={() => deleteRule(r.id)}>
+                               <Button type="link" size="small" danger>删除</Button>
+                             </Popconfirm>
+                           </Space>) },
                        ]} />) },
+              { key: 'dsl', label: '自定义规则 (DSL)', children: (
+                <div>
+                  <Alert type="info" showIcon style={{ marginBottom: 10 }}
+                    message={'用可视化表单生成规则 DSL：WHEN <指标> <运算符> <阈值> [FOR <作用域>] THEN [SUGGEST] <维度> "<模板>" [WITH SEVERITY <级别>]。模板支持 {scope} {value} {threshold} {metric} 等占位符。'}
+                    description="运行「运行分析」后，命中自定义规则的结论会出现在下方行动方案对应维度中。" />
+                  <Row gutter={10}>
+                    <Col xs={24} md={12}>
+                      <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                        <Input addonBefore="名称" placeholder="规则名称" value={dsl.name_zh}
+                               onChange={(e) => setDsl({ ...dsl, name_zh: e.target.value })} />
+                        <Input addonBefore="代码" placeholder="唯一代码，如 dsl_acos_hot" value={dsl.code}
+                               onChange={(e) => setDsl({ ...dsl, code: e.target.value })} />
+                        <Space.Compact style={{ width: '100%' }}>
+                          <Select style={{ width: '42%' }} value={dsl.metric}
+                                  onChange={(v) => setDsl({ ...dsl, metric: v })}
+                                  options={dslMeta.metrics.map((m) => ({ value: m.code, label: `${m.name_zh}(${m.code})` }))} />
+                          <Select style={{ width: '20%' }} value={dsl.op}
+                                  onChange={(v) => setDsl({ ...dsl, op: v })}
+                                  options={dslMeta.ops.map((o) => ({ value: o.sym, label: o.label }))} />
+                          <InputNumber style={{ width: '38%' }} value={dsl.threshold}
+                                       onChange={(v) => setDsl({ ...dsl, threshold: v ?? 0 })} />
+                        </Space.Compact>
+                        <Space.Compact style={{ width: '100%' }}>
+                          <Select style={{ width: '50%' }} value={dsl.scope}
+                                  onChange={(v) => setDsl({ ...dsl, scope: v })}
+                                  options={dslMeta.scopes.map((s) => ({ value: s.code, label: `${s.name_zh}(${s.code})` }))} />
+                          <Select style={{ width: '50%' }} value={dsl.dimension}
+                                  onChange={(v) => setDsl({ ...dsl, dimension: v })}
+                                  options={dslMeta.dimensions.map((d) => ({ value: d.code, label: `${d.name_zh}(${d.code})` }))} />
+                        </Space.Compact>
+                        <Select style={{ width: '100%' }} value={dsl.severity}
+                                onChange={(v) => setDsl({ ...dsl, severity: v })}
+                                options={dslMeta.severities.map((s) => ({ value: s.code, label: `严重度 ${s.code} → ${s.priority}` }))} />
+                        <Input.TextArea rows={3} placeholder="建议模板，支持 {scope} {value} {threshold} {metric} 等占位符"
+                                       value={dsl.template}
+                                       onChange={(e) => setDsl({ ...dsl, template: e.target.value })} />
+                      </Space>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <div className="wb-muted" style={{ marginBottom: 4 }}>实时 DSL 预览</div>
+                      <pre className="wb-pre" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{dslPreviewText}</pre>
+                      {dslCheck && (
+                        dslCheck.ok
+                          ? <Alert type="success" showIcon message="校验通过" />
+                          : <Alert type="error" showIcon message={dslCheck.errors.join('；')} />
+                      )}
+                      <Space style={{ marginTop: 10 }}>
+                        <Button size="small" onClick={validateDsl}>校验语法</Button>
+                        <Button size="small" type="primary" loading={dslSaving} onClick={saveDslRule}>
+                          {editingRule ? '保存修改' : '保存为规则'}
+                        </Button>
+                        {editingRule && (
+                          <Button size="small" onClick={() => {
+                            setEditingRule(null)
+                            setDsl({ code: '', name_zh: '', dimension: 'bid', metric: 'acos', op: '>', threshold: 40,
+                                     scope: 'account', severity: 'mid', template: '' })
+                            setDslCheck(null)
+                          }}>取消编辑</Button>
+                        )}
+                      </Space>
+                    </Col>
+                  </Row>
+                </div>) },
               { key: 'prompt', label: '提示词模板', children: (
                 <div>
                   <Alert type="info" showIcon style={{ marginBottom: 8 }}

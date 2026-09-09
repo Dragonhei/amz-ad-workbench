@@ -39,13 +39,19 @@
 - **种子数据**：店铺 1/2/3 各写入 6 周排名历史（含 1 处明显掉落以演示预警）。
 - **验收**：e2e 5e 节覆盖趋势序列、掉落预警、列表 delta、ABA 词获取与一键加入；全量 **59/59 通过**。工作量 **M**（已完成）。
 
-### P1-4 规则可视化 DSL
+### P1-4 规则可视化 DSL ✅ 已完成
 - **目标**：用结构化、可拖选的「条件 → 动作」规则替代/增强裸 JSON 规则，非工程师可维护。
-- **DSL 形态**：`WHEN <metric> <op> <threshold> FOR <scope> THEN suggest <dimension> "<模板>" WITH severity <high|mid|low>`。
-- **数据模型**：`AnalysisRule` 增加 `dsl_text` 与结构化 `condition_json`（metric/op/threshold/scope/dimension/template/severity）。
-- **后端**：DSL 解析器 + 校验器（转 ActionItem）；`/api/analysis/rules` 兼容新旧格式。
-- **前端**：可视化规则构建器（选指标+运算符+阈值+作用维度+建议模板+严重度），实时预览 DSL 文本。
-- **验收**：界面增删一条规则后，重新运行分析即体现该规则结论。工作量 **L**。
+- **DSL 形态（最终实现）**：`WHEN <metric> <op> <threshold> [FOR <scope>] THEN [SUGGEST] <dimension> "<模板>" [WITH SEVERITY <high|mid|low>]`。
+  - 示例：`WHEN acos > 40 FOR campaign THEN SUGGEST bid "活动「{scope}」ACOS 达 {value}%，建议下调竞价" WITH SEVERITY mid`
+  - `<metric>`：统一指标口径（impressions/clicks/ctr/cpc/spend/orders/cvr/sales/acos/roas/tacos）；百分比指标按百分比数值比较（如 `ctr < 0.2` 表示 0.2%）。
+  - `<scope>`：account（默认，整体汇总）/ campaign / keyword / adgroup / ad_format / placement / targeting，决定聚合粒度。
+  - `<dimension>`：12 维分析维度之一；`<severity>`：high/mid/low → 结论优先级 P0/P1/P2。
+  - 模板支持占位符：`{metric} {metric_code} {op} {op_sym} {threshold} {value} {scope} {dimension} {entities} {name}`。
+- **数据模型**：`AnalysisRule` 增加 `dsl_text`（Text，存 DSL 原文）；结构化条件由 `dsl.parse_dsl` 实时解析得到（不另存冗余 JSON）。旧库经 `seed._ensure_schema` 自动 `ALTER TABLE` 补齐 `dsl_text` 列。
+- **后端**：新增 `app/dsl.py`（`parse_dsl` / `validate_rule` / `check_dsl` / `evaluate_rule` / `dsl_meta`）；`rules.run_rules` 第 15 节加载启用且含有效 `dsl_text` 的规则并求值，命中即生成对应维度结论（带证据）；`routers/analysis.py` 新增 `GET /api/analysis/dsl/meta`、`GET /api/analysis/dsl/validate`、`POST /api/analysis/rules`、`DELETE /api/analysis/rules/{rid}`，并让 `GET/PUT /api/analysis/rules` 兼容读写 `dsl_text`。
+- **前端**：分析页新增「自定义规则 (DSL)」Tab——表格展示现有规则（DSL 文本/启用开关/编辑/删除）+ 可视化构建器（选指标/运算符/阈值/作用域/维度/严重度 + 模板），实时拼装并预览 DSL，支持「校验语法」与「保存为规则/保存修改」；运行分析后命中结论自然出现在行动方案对应维度。
+- **种子数据**：内置 2 条示例 DSL 规则（活动 ACOS 超阈值、关键词 CTR 偏低）演示。
+- **验收**：e2e 6b 节覆盖 DSL meta、合法/非法 DSL 校验、`POST` 创建规则、运行分析断言该规则命中并产出对应维度结论（带证据）、`DELETE` 规则后列表移除；全量 **69/69 通过**（新增 10 项）。工作量 **L**（已完成）。
 
 ### P1-5 方案执行回填与效果复盘
 - **目标**：把分析行动项标记为「已执行」并回填改动，复盘执行前后效果。
