@@ -154,6 +154,31 @@ inv_hi = c.get("/api/inventory?shop_id=1&threshold=1", headers=H).json()
 check("阈值=1 时低库存归零", (inv_hi.get("summary", {}).get("low_count") or 0) == 0,
       f"low_count={inv_hi.get('summary', {}).get('low_count')}")
 
+print("\n=== 5e. 排名追踪与竞品库（P1-3）===")
+# 排名趋势接口：应返回多条序列与掉落预警
+rt = c.get("/api/kb/rank/trend?shop_id=1", headers=H).json()
+check("排名趋势返回序列", (rt.get("total_series") or 0) >= 1,
+      f"total_series={rt.get('total_series')}")
+check("存在排名掉落预警（seed 中 shower curtain liner 跌 5 名）",
+      any(d.get("asin") == "B0C1" and d.get("delta", 0) >= 3 for d in rt.get("drops", [])),
+      "drops=" + ",".join(f"{d['term']}:#{d['prev']}→#{d['latest']}" for d in rt.get("drops", [])[:4]))
+# 排名列表应附加 delta_organic（最新一条）
+rk = c.get("/api/kb/rank?shop_id=1", headers=H).json()
+delta_rows = [r for r in rk.get("items", []) if "delta_organic" in r]
+check("排名列表含较上周 delta", len(delta_rows) >= 1,
+      f"带 delta 行数={len(delta_rows)}")
+# ABA 高潜词 → 一键加入排名追踪
+aba = c.get("/api/kb/aba/terms?shop_id=1&limit=5", headers=H).json()
+check("ABA 词可获取", (aba.get("items") and len(aba["items"]) > 0), f"terms={len(aba.get('items', []))}")
+if aba.get("items"):
+    term0 = aba["items"][0]["term"]
+    fa = c.post("/api/kb/rank/from-aba", json={"shop_id": 1, "asin": "B0C9", "term": term0,
+                                               "marketplace": "US", "rank_source": "aba"}, headers=H).json()
+    check("ABA 词一键加入排名追踪", fa.get("ok") is True, f"id={fa.get('id')}")
+    rk2 = c.get("/api/kb/rank?shop_id=1", headers=H).json()
+    check("排名库新增 ABA 词记录", any(r.get("term") == term0 for r in rk2.get("items", [])),
+          f"新增词={term0}")
+
 print("\n=== 6. 分析（规则引擎兜底）===")
 rr = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False},
             headers=H).json()

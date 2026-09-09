@@ -1,5 +1,6 @@
 """初始化种子数据：组织/店铺/账号、指标字典、默认规则、提示词、示例知识库。"""
 import json
+from datetime import date, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 from .auth import hash_password
 from .db import SessionLocal
 from .metrics import METRICS
-from .models import (AnalysisRule, KbBidRule, KbCompetitor, KbKeyword, LlmProvider,
+from .models import (AnalysisRule, KbBidRule, KbCompetitor, KbKeyword, KbRankTrack, LlmProvider,
                      MetricDefinition, Org, PromptTemplate, Shop, User)
 from .rules import DEFAULT_PROMPT, DEFAULT_RULES
 
@@ -34,6 +35,13 @@ def _ensure_schema(db: Session):
     if any(col not in fact_cols for col, _ in (
         ("landing_page_id", ""), ("creative_id", ""), ("headline", ""),
         ("audience_id", ""), ("placement", ""), ("associated_asin", ""))):
+        db.commit()
+    # P1-3：kb_rank_track 补齐 marketplace / rank_source 列（旧库升级兼容）
+    rank_cols = {r[1] for r in db.execute(text("PRAGMA table_info(kb_rank_track)")).fetchall()}
+    for col, ctype in (("marketplace", "VARCHAR(16)"), ("rank_source", "VARCHAR(16)")):
+        if col not in rank_cols:
+            db.execute(text(f"ALTER TABLE kb_rank_track ADD COLUMN {col} {ctype} DEFAULT ''"))
+    if any(col not in rank_cols for col, _ in (("marketplace", ""), ("rank_source", ""))):
         db.commit()
 
 
@@ -113,6 +121,26 @@ def seed_all(db: Session = None):
             db.add(KbCompetitor(shop_id=1, competitor_asin="B0X3333333", brand="LuxLinen",
                                 price=27.90, rating=4.7, reviews=8420,
                                 selling_points="华夫格纹 / 酒店同款 / 180 尺寸"))
+        # P1-3：排名追踪示例（多日期历史，含一处明显掉落以演示预警）
+        if db.query(KbRankTrack).count() == 0:
+            today = date.today()
+            # (shop_id, asin, term, marketplace, [(周偏移, 自然排名, 广告排名, 页码), ...])
+            history = [
+                (1, "B0C1", "shower curtain liner", "US",
+                 [(5, 5, 3, 1), (4, 4, 3, 1), (3, 6, 4, 1), (2, 5, 4, 1), (1, 7, 5, 1), (0, 12, 6, 2)]),
+                (1, "B0C1", "fabric shower curtain", "US",
+                 [(5, 9, 0, 1), (4, 8, 0, 1), (3, 7, 0, 1), (2, 7, 0, 1), (1, 6, 0, 1), (0, 6, 0, 1)]),
+                (2, "B0C2", "duschvorhang", "DE",
+                 [(5, 11, 0, 1), (4, 10, 0, 1), (3, 12, 0, 1), (2, 9, 0, 1), (1, 8, 0, 1), (0, 14, 0, 2)]),
+                (3, "B0C1", "shower curtain", "UK",
+                 [(5, 6, 4, 1), (4, 6, 4, 1), (3, 5, 3, 1), (2, 5, 3, 1), (1, 5, 3, 1), (0, 4, 2, 1)]),
+            ]
+            for sid, asin, term, mp, pts in history:
+                for off, org, ad, pg in pts:
+                    d = today - timedelta(weeks=off)
+                    db.add(KbRankTrack(shop_id=sid, asin=asin, term=term, marketplace=mp,
+                                       rank_source="seed", track_date=d,
+                                       organic_rank=org, ad_rank=ad, page=pg))
         db.commit()
     finally:
         db.close()

@@ -379,15 +379,19 @@ class KbBidRule(Base):
 
 
 class KbRankTrack(Base):
+    """排名追踪：按 ASIN/关键词/站点记录自然与广告排名，支撑趋势与掉落预警（P1-3）。"""
     __tablename__ = "kb_rank_track"
     id = Column(Integer, primary_key=True)
     shop_id = Column(Integer, default=0)
     asin = Column(String(32), default="")
     term = Column(String(256), default="")
+    marketplace = Column(String(16), default="US")          # US|DE|UK|JP|... 站点
+    rank_source = Column(String(16), default="manual")       # manual|aba|import
     track_date = Column(Date, default=date.today)
     organic_rank = Column(Integer, default=0)
     ad_rank = Column(Integer, default=0)
     page = Column(Integer, default=1)
+    __table_args__ = (Index("ix_kb_rank_shop_asin_term_mp", "shop_id", "asin", "term", "marketplace"),)
 
 
 class KbCompetitor(Base):

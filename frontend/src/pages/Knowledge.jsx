@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Card, Tabs, Table, Button, Space, Modal, Form, Input, InputNumber, Select, Tag,
-  message, Drawer, Popconfirm, Upload, Radio, Alert,
+  message, Drawer, Popconfirm, Upload, Radio, Alert, Empty,
 } from 'antd'
-import { DownloadOutlined, ImportOutlined, PlusOutlined, HistoryOutlined } from '@ant-design/icons'
+import { DownloadOutlined, ImportOutlined, PlusOutlined, HistoryOutlined, ArrowDownOutlined } from '@ant-design/icons'
+import ReactECharts from 'echarts-for-react'
 import api from '../api.js'
 import { useCtx } from '../App.jsx'
 
@@ -37,6 +38,8 @@ const CFG = {
     fields: [
       { k: 'asin', label: 'ASIN', req: true },
       { k: 'term', label: '关键词', req: true },
+      { k: 'marketplace', label: '站点', type: 'select', opts: ['US', 'DE', 'UK', 'JP', 'FR', 'CA', 'AU'] },
+      { k: 'rank_source', label: '来源', type: 'select', opts: ['manual', 'aba', 'import'] },
       { k: 'track_date', label: '日期(YYYY-MM-DD)' },
       { k: 'organic_rank', label: '自然排名', type: 'num' },
       { k: 'ad_rank', label: '广告排名', type: 'num' },
@@ -68,6 +71,8 @@ export default function Knowledge() {
   const [importMode, setImportMode] = useState('append')
   const [logOpen, setLogOpen] = useState(false)
   const [logs, setLogs] = useState([])
+  const [abaOpen, setAbaOpen] = useState(false)
+  const [abaTerms, setAbaTerms] = useState([])
   const [form] = Form.useForm()
 
   const load = () => {
@@ -75,13 +80,23 @@ export default function Knowledge() {
   }
   useEffect(load, [entity, shopId])
 
-  const cfg = CFG[entity]
+  const cfg = CFG[entity] || CFG.keyword
+  const rankCols = entity === 'rank' ? [{
+    title: '较上周', dataIndex: 'delta_organic', width: 96,
+    render: (v) => {
+      if (v === undefined || v === null) return <span style={{ color: '#999' }}>—</span>
+      if (v > 0) return <Tag color="red" icon={<ArrowDownOutlined />}>{`↓${v}`}</Tag>
+      if (v < 0) return <Tag color="green">{`↑${-v}`}</Tag>
+      return <Tag color="default">0</Tag>
+    },
+  }] : []
   const cols = [
     ...cfg.fields.map((f) => ({
       title: f.label, dataIndex: f.k, ellipsis: true,
       render: (v) => (f.k === 'status'
         ? <Tag color={v === 'active' ? 'green' : v === 'negative' ? 'red' : 'gold'}>{v}</Tag> : String(v ?? '')),
     })),
+    ...rankCols,
     {
       title: '操作', width: 120, fixed: 'right',
       render: (_, r) => (
@@ -131,11 +146,29 @@ export default function Knowledge() {
     setLogs(r.data.items); setLogOpen(true)
   }
 
+  const openAba = async () => {
+    try {
+      const r = await api.get(`/kb/aba/terms?shop_id=${shopId}&limit=30`)
+      setAbaTerms(r.data.items); setAbaOpen(true)
+    } catch (e) { message.error(e.message) }
+  }
+  const addFromAba = async (t) => {
+    try {
+      await api.post('/kb/rank/from-aba', { shop_id: shopId, term: t.term, marketplace: 'US', rank_source: 'aba' })
+      message.success(`已将「${t.term}」加入排名追踪`); setAbaOpen(false); load()
+    } catch (e) { message.error(e.message) }
+  }
+
+  const isTrend = entity === 'rank_trend'
+
   return (
     <Card size="small" className="wb-card"
           title="知识库"
-          extra={<Space>
+          extra={isTrend ? null : <Space>
             <Button size="small" icon={<PlusOutlined />} onClick={() => { setEditing(null); form.resetFields(); setOpen(true) }}>新增</Button>
+            {entity === 'rank' && (
+              <Button size="small" icon={<ImportOutlined />} onClick={openAba}>从 ABA 添加</Button>
+            )}
             <Button size="small" icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>批量导入</Button>
             <Button size="small" icon={<DownloadOutlined />} onClick={doExport}>导出 CSV</Button>
             <Button size="small" icon={<HistoryOutlined />} onClick={openLog}>变更记录</Button>
@@ -145,7 +178,10 @@ export default function Knowledge() {
               key: k, label: v.name,
               children: <Table size="small" rowKey="id" scroll={{ x: 900 }} dataSource={rows}
                                pagination={{ pageSize: 12 }} columns={cols} />,
-            }))} />
+            })).concat([{
+              key: 'rank_trend', label: '排名趋势',
+              children: <RankTrend shopId={shopId} />,
+            }])} />
 
       <Modal title={`${editing?.id ? '编辑' : '新增'} · ${cfg.name}`} open={open} destroyOnClose forceRender
              onCancel={() => setOpen(false)} onOk={() => form.submit()}>
@@ -185,6 +221,97 @@ export default function Knowledge() {
                  { title: '变更后', dataIndex: 'new_value', ellipsis: true },
                ]} />
       </Drawer>
+
+      <Modal title="从 ABA 高潜词加入排名追踪" open={abaOpen} onCancel={() => setAbaOpen(false)} footer={null} width={640}>
+        <Alert type="info" showIcon style={{ marginBottom: 8 }}
+               message="选择下方 ABA 高潜搜索词，一键创建排名追踪记录（排名待回填实测值）。" />
+        <Table size="small" rowKey="term" dataSource={abaTerms} pagination={{ pageSize: 10 }}
+               columns={[
+                 { title: '搜索词', dataIndex: 'term', ellipsis: true },
+                 { title: 'ABA 排名', dataIndex: 'search_rank', width: 90 },
+                 { title: 'Top3 点击占比', dataIndex: 'top3_click_share', width: 120,
+                   render: (v) => (v ? `${Math.round(v * 100)}%` : '—') },
+                 { title: '操作', width: 90, render: (_, r) => (
+                   <Button type="link" size="small" onClick={() => addFromAba(r)}>加入追踪</Button>
+                 ) },
+               ]} />
+      </Modal>
     </Card>
+  )
+}
+
+function RankTrend({ shopId }) {
+  const seriesKey = (s) => `${s.asin}|${s.term}|${s.marketplace}`
+  const [series, setSeries] = useState([])
+  const [drops, setDrops] = useState([])
+  const [sel, setSel] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const load = () => {
+    setLoading(true)
+    api.get(`/kb/rank/trend?shop_id=${shopId}`).then((r) => {
+      setSeries(r.data.series || []); setDrops(r.data.drops || [])
+      if (!sel && (r.data.series || []).length) setSel(seriesKey(r.data.series[0]))
+    }).catch((e) => message.error(e.message)).finally(() => setLoading(false))
+  }
+  useEffect(load, [shopId]) // eslint-disable-line
+
+  const cur = series.find((s) => seriesKey(s) === sel) || series[0]
+
+  const opt = useMemo(() => {
+    if (!cur) return {}
+    const pts = cur.points || []
+    return {
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['自然排名', '广告排名'] },
+      grid: { left: 48, right: 16, top: 36, bottom: 30 },
+      xAxis: { type: 'category', data: pts.map((p) => p.date) },
+      yAxis: { type: 'value', name: '排名', inverse: true, min: 1,
+               max: Math.max(20, ...pts.map((p) => Math.max(p.organic_rank, p.ad_rank) || 0)) },
+      series: [
+        { name: '自然排名', type: 'line', smooth: true, data: pts.map((p) => p.organic_rank),
+          itemStyle: { color: '#1677ff' }, lineStyle: { width: 2 } },
+        { name: '广告排名', type: 'line', smooth: true, data: pts.map((p) => p.ad_rank || null),
+          itemStyle: { color: '#fa8c16' }, lineStyle: { width: 2, type: 'dashed' } },
+      ],
+    }
+  }, [cur])
+
+  if (!series.length) {
+    return <Empty style={{ marginTop: 40 }} description={loading ? '加载中…' : '暂无排名数据，请在「排名追踪」Tab 录入或导入'} />
+  }
+  return (
+    <div>
+      <Space style={{ marginBottom: 12 }}>
+        <span>选择追踪对象：</span>
+        <Select style={{ width: 360 }} value={sel || seriesKey(cur)} onChange={setSel}
+                options={series.map((s) => ({ value: seriesKey(s),
+                  label: `${s.term}（${s.asin}）· ${s.marketplace}` }))} />
+      </Space>
+      {cur && (
+        <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
+          {cur.term} · {cur.asin} · {cur.marketplace} ｜ 最新自然排名 #{cur.latest_organic}
+          {cur.delta != null && <span style={{ marginLeft: 8, color: cur.delta >= 3 ? '#cf1322' : '#52c41a' }}>
+            （较上周 {cur.delta >= 0 ? '↓' : '↑'}{Math.abs(cur.delta)} 名）
+          </span>}
+        </div>
+      )}
+      <ReactECharts option={opt} style={{ height: 320 }} notMerge />
+      <Card size="small" title="排名掉落预警（较上周跌 ≥ 3 名）" style={{ marginTop: 16 }}
+            type={drops.length ? 'inner' : 'inner'}>
+        {drops.length ? (
+          <Table size="small" rowKey={(d) => seriesKey(d)} dataSource={drops} pagination={false}
+                 columns={[
+                   { title: '关键词', dataIndex: 'term' },
+                   { title: 'ASIN', dataIndex: 'asin', width: 100 },
+                   { title: '站点', dataIndex: 'marketplace', width: 70 },
+                   { title: '上周', dataIndex: 'prev', width: 70, render: (v) => `#${v}` },
+                   { title: '本周', dataIndex: 'latest', width: 70, render: (v) => `#${v}` },
+                   { title: '跌幅', dataIndex: 'delta', width: 80,
+                     render: (v) => <Tag color="red">↓{v}</Tag> },
+                 ]} />
+        ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无明显掉落" />}
+      </Card>
+    </div>
   )
 }

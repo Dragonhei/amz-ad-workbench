@@ -2,7 +2,7 @@
 from sqlalchemy import func
 
 from .models import (FactAdPerf, FactSearchTerm, FactAba, FactListingDaily, FactInventory,
-                     KbKeyword, KbBidRule, KbCompetitor)
+                     KbKeyword, KbBidRule, KbCompetitor, KbRankTrack)
 from .metrics import aggregate, calc_metrics, period_totals
 
 DIMENSIONS = [
@@ -409,4 +409,38 @@ def run_rules(db, shop_id, d1, d2, target_acos=35.0, params=None):
             "expected_impact": "避免亏损扩大",
             "evidence": ev("fact_ad_perf.summary.risk", {"risks": risks, "summary": summary}),
         })
+
+    # 14) 排名掉落预警（基于 kb_rank_track 自然排名环比）
+    rt_rows = db.query(KbRankTrack).filter(KbRankTrack.shop_id.in_([shop_id, 0])).all()
+    if rt_rows:
+        latest = {}
+        for r in rt_rows:
+            key = (r.asin, r.term, r.marketplace)
+            if key not in latest or r.track_date > latest[key].track_date:
+                latest[key] = r
+        dropped = []
+        for (asin, term, mp), rec in latest.items():
+            prevs = [r for r in rt_rows if (r.asin, r.term, r.marketplace) == (asin, term, mp)
+                     and 0 < (rec.track_date - r.track_date).days <= 10]
+            if not prevs:
+                continue
+            prev = max(prevs, key=lambda x: x.track_date)
+            if rec.organic_rank and prev.organic_rank and rec.organic_rank - prev.organic_rank \
+                    >= params.get("rank_drop", 5):
+                dropped.append({"asin": asin, "term": term, "marketplace": mp,
+                                "latest": rec.organic_rank, "prev": prev.organic_rank,
+                                "delta": rec.organic_rank - prev.organic_rank})
+        if dropped:
+            worst = max(dropped, key=lambda x: x["delta"])
+            items.append({
+                "dimension": "competitor", "priority": "P1", "confidence": 0.8,
+                "title": f"{len(dropped)} 个关键词自然排名较上周下跌，最大跌幅 {worst['delta']} 名",
+                "detail": "、".join(f"{d['term']}({d['asin']}) #{d['prev']}→#{d['latest']}"
+                                    for d in sorted(dropped, key=lambda x: -x["delta"])[:6]),
+                "action": "排名下跌的词优先排查：① 差评/价格/库存是否恶化；② 加大该词精准投放与优惠券；"
+                          "③ 若为广告位原因，搜索结果顶部加价；④ 用 SD 商品定向拦截竞品流量。",
+                "expected_impact": "稳住核心词排名，避免自然流量与转化持续流失",
+                "evidence": ev("kb_rank_track[organic_rank vs last week drop>=%d]" % params.get("rank_drop", 5),
+                               {"threshold": params.get("rank_drop", 5), "dropped": dropped[:6]}),
+            })
     return items

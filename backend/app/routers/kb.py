@@ -2,7 +2,7 @@
 import csv
 import io
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import current_user
 from ..db import get_db
-from ..models import (KbBidRule, KbChangeLog, KbCompetitor, KbKeyword, KbRankTrack, User)
+from ..models import (FactAba, KbBidRule, KbChangeLog, KbCompetitor, KbKeyword, KbRankTrack, User)
 
 router = APIRouter(prefix="/api/kb", tags=["kb"])
 
@@ -19,7 +19,8 @@ ENTITIES = {
     "keyword": (KbKeyword, ["id", "term", "intent", "relevance", "status", "asin", "note"]),
     "bid": (KbBidRule, ["id", "keyword", "match_type", "placement", "base_cpc", "min_cpc",
                         "max_cpc", "step", "note"]),
-    "rank": (KbRankTrack, ["id", "asin", "term", "track_date", "organic_rank", "ad_rank", "page"]),
+    "rank": (KbRankTrack, ["id", "asin", "term", "marketplace", "rank_source", "track_date",
+                           "organic_rank", "ad_rank", "page"]),
     "competitor": (KbCompetitor, ["id", "competitor_asin", "brand", "price", "rating", "reviews",
                                   "selling_points", "note"]),
 }
@@ -40,13 +41,46 @@ def _row(model, r, fields):
     return d
 
 
+def _rank_delta(rows):
+    """为每条排名记录附加 `delta_organic`：与 10 天内最近一次环比（正数=排名下跌/变差）。"""
+    by_key = {}
+    for r in rows:
+        by_key.setdefault((r.asin, r.term, r.marketplace), []).append(r)
+    delta = {}
+    for key, recs in by_key.items():
+        recs.sort(key=lambda x: x.track_date)
+        for i, r in enumerate(recs):
+            prev = None
+            for j in range(i - 1, -1, -1):
+                if 0 < (r.track_date - recs[j].track_date).days <= 10:
+                    prev = recs[j]
+                    break
+            if prev and r.organic_rank and prev.organic_rank:
+                delta[(key, r.track_date)] = r.organic_rank - prev.organic_rank
+    return delta
+
+
 def _list(entity, shop_id, db):
     model, fields = ENTITIES[entity]
     q = db.query(model)
     if hasattr(model, "shop_id"):
         q = q.filter(model.shop_id.in_([shop_id, 0]))
     rows = q.order_by(model.id.desc()).limit(2000).all()
-    return {"items": [_row(model, r, fields) for r in rows], "fields": fields}
+    items = [_row(model, r, fields) for r in rows]
+    if entity == "rank":
+        delta = _rank_delta(rows)
+        # 仅最新一条标注 delta（按 key 找最新 track_date）
+        latest_date = {}
+        for r in rows:
+            key = (r.asin, r.term, r.marketplace)
+            if key not in latest_date or r.track_date > latest_date[key]:
+                latest_date[key] = r.track_date
+        by_id = {it["id"]: it for it in items}
+        for r in rows:
+            key = (r.asin, r.term, r.marketplace)
+            if latest_date[key] == r.track_date and (key, r.track_date) in delta:
+                by_id[r.id]["delta_organic"] = delta[(key, r.track_date)]
+    return {"items": items, "fields": fields}
 
 
 class ImportIn(BaseModel):
@@ -167,6 +201,88 @@ def export_entity(entity: str, shop_id: int = 1, db: Session = Depends(get_db),
         w.writerow({k: r.get(k, "") for k in data["fields"]})
     return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f"attachment; filename={entity}.csv"})
+
+
+@router.get("/rank/trend")
+def rank_trend(shop_id: int = 1, marketplace: str = "", asin: str = "", term: str = "",
+               limit: int = 50, db: Session = Depends(get_db),
+               u: User = Depends(current_user)):
+    """排名趋势时间序列：按 (asin, term, marketplace) 分组，附最新一周环比 delta 与掉落预警。"""
+    q = db.query(KbRankTrack).filter(KbRankTrack.shop_id.in_([shop_id, 0]))
+    if marketplace:
+        q = q.filter(KbRankTrack.marketplace == marketplace)
+    if asin:
+        q = q.filter(KbRankTrack.asin == asin)
+    if term:
+        q = q.filter(KbRankTrack.term == term)
+    rows = q.order_by(KbRankTrack.asin, KbRankTrack.term,
+                     KbRankTrack.marketplace, KbRankTrack.track_date).all()
+
+    groups = {}
+    for r in rows:
+        groups.setdefault((r.asin, r.term, r.marketplace), []).append(r)
+    series, drops = [], []
+    for (asin_, term_, mp), recs in groups.items():
+        recs.sort(key=lambda x: x.track_date)
+        points = [{
+            "date": (x.track_date.isoformat() if isinstance(x.track_date, (date, datetime))
+                     else str(x.track_date)),
+            "organic_rank": x.organic_rank, "ad_rank": x.ad_rank, "page": x.page,
+        } for x in recs]
+        latest = recs[-1]
+        prev = None
+        for x in recs[:-1]:
+            if 0 < (latest.track_date - x.track_date).days <= 10:
+                prev = x
+        delta = (latest.organic_rank - prev.organic_rank) if (prev and latest.organic_rank
+                                                              and prev.organic_rank) else None
+        series.append({
+            "asin": asin_, "term": term_, "marketplace": mp,
+            "rank_source": latest.rank_source, "points": points,
+            "latest_organic": latest.organic_rank, "prev_organic": prev.organic_rank if prev else None,
+            "delta": delta,
+        })
+        if delta is not None and delta >= 3:
+            drops.append({"asin": asin_, "term": term_, "marketplace": mp,
+                          "latest": latest.organic_rank, "prev": prev.organic_rank, "delta": delta})
+    # 有掉落的系列优先展示
+    series.sort(key=lambda s: (s["delta"] is not None and s["delta"] >= 3, s["delta"] or 0), reverse=True)
+    return {"series": series[:limit], "drops": drops, "total_series": len(series)}
+
+
+@router.get("/aba/terms")
+def aba_terms(shop_id: int = 1, limit: int = 30, db: Session = Depends(get_db),
+              u: User = Depends(current_user)):
+    """返回店铺内 ABA 高潜搜索词，供一键加入排名追踪。"""
+    rows = (db.query(FactAba).filter(FactAba.shop_id == shop_id)
+            .order_by(FactAba.search_rank).limit(limit).all())
+    return {"items": [{
+        "term": a.search_term, "search_rank": a.search_rank,
+        "top3_click_share": a.top3_click_share, "top3_conv_share": a.top3_conv_share,
+    } for a in rows]}
+
+
+class RankFromAbaIn(BaseModel):
+    shop_id: int = 1
+    asin: str = ""
+    term: str
+    marketplace: str = "US"
+    rank_source: str = "aba"
+
+
+@router.post("/rank/from-aba")
+def rank_from_aba(body: RankFromAbaIn, db: Session = Depends(get_db),
+                  u: User = Depends(current_user)):
+    """从 ABA 高潜词一键新建排名追踪记录（默认排名留空，待回填实测值）。"""
+    obj = KbRankTrack(shop_id=body.shop_id, asin=body.asin, term=body.term,
+                      marketplace=body.marketplace, rank_source=body.rank_source,
+                      track_date=date.today(), organic_rank=0, ad_rank=0, page=1)
+    db.add(obj)
+    db.commit()
+    _log(db, body.shop_id, "rank", obj.id, "create", "",
+         f"从 ABA 词 {body.term} 加入排名追踪", u.username)
+    db.commit()
+    return {"ok": True, "id": obj.id}
 
 
 @router.get("/changes/log")

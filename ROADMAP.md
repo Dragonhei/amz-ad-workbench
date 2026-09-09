@@ -31,13 +31,13 @@
 - **验收**：新增示例报表 `sb_keyword_report.csv` / `sd_product_report.csv` 随 3 店铺灌库；e2e 5c 节覆盖 SB/SD 自动识别、入库、按 `ad_format` 聚合同时含 SP/SB/SD、`ad_format=SB` 过滤、placement/targeting 下钻。全量 **45/45 通过**。
 - **已知限制**：SB 与 SD 在 `FactAdPerf` 共用同一张表、以 `ad_format` 区分；跨格式聚合时相同 `campaign_id` 仍会归并（同 P1-1 的跨店命名空间问题，后续按 `shop_id+ad_format` 命名空间分组）。工作量 **L**（已完成）。
 
-### P1-3 排名追踪与竞品库
+### P1-3 排名追踪与竞品库 ✅ 已完成
 - **目标**：竞品 ASIN/品牌库可视化，排名随时间追踪，掉落预警。
-- **现状**：`KbCompetitor` / `KbRankTrack` 已存在，需补 UI、自动建任务与图表。
-- **数据模型**：`KbRankTrack` 增加 `marketplace`、`keyword`、`rank_source` 维度。
-- **后端**：排名录入/批量导入接口（复用 `/api/kb`）；ABA 高频词可一键「加入排名追踪」；排名掉落告警规则（较上周跌 N 名触发）。
-- **前端**：知识库页增加「竞品」「排名」Tab；排名趋势 ECharts 折线；掉落行高亮。
-- **验收**：能看到竞品/关键词排名随时间变化曲线与预警。工作量 **M**。
+- **数据模型**：`KbRankTrack` 增加 `marketplace`(默认 US)、`rank_source`(manual|aba|import) 两列与复合索引；旧库经 `seed._ensure_schema` 自动 `ALTER TABLE` 补齐。
+- **后端**：排名列表接口（复用 `/api/kb/rank`）为最新一条记录附加 `delta_organic`（较 10 天内上次环比，正数=下跌）；新增 `GET /api/kb/rank/trend`（按 asin+term+marketplace 分组时间序列 + 掉落预警 `drops`）、`GET /api/kb/aba/terms`（ABA 高潜词）、`POST /api/kb/rank/from-aba`（一键加入追踪）；`rules.run_rules` 新增第 14 节排名掉落告警（较上周跌 ≥ 5 名 → `competitor` 维度 P1 结论，含证据）。
+- **前端**：知识库页「排名追踪」增加 `marketplace` / `rank_source` 字段与「较上周」delta 列（红降绿升）；新增「排名趋势」Tab（ECharts 折线 + 掉落预警表），排名轴倒序；「从 ABA 添加」弹窗一键建追踪。
+- **种子数据**：店铺 1/2/3 各写入 6 周排名历史（含 1 处明显掉落以演示预警）。
+- **验收**：e2e 5e 节覆盖趋势序列、掉落预警、列表 delta、ABA 词获取与一键加入；全量 **59/59 通过**。工作量 **M**（已完成）。
 
 ### P1-4 规则可视化 DSL
 - **目标**：用结构化、可拖选的「条件 → 动作」规则替代/增强裸 JSON 规则，非工程师可维护。
