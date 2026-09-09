@@ -48,6 +48,14 @@ def _ensure_schema(db: Session):
     if "dsl_text" not in rule_cols:
         db.execute(text("ALTER TABLE analysis_rule ADD COLUMN dsl_text TEXT DEFAULT ''"))
         db.commit()
+    # P1-5：action_item 补齐 executed / executed_at 列（旧库升级兼容，新表由 create_all 自动建）
+    ai_cols = {r[1] for r in db.execute(text("PRAGMA table_info(action_item)")).fetchall()}
+    if "executed" not in ai_cols:
+        db.execute(text("ALTER TABLE action_item ADD COLUMN executed BOOLEAN DEFAULT 0"))
+    if "executed_at" not in ai_cols:
+        db.execute(text("ALTER TABLE action_item ADD COLUMN executed_at DATETIME"))
+    if "executed" not in ai_cols or "executed_at" not in ai_cols:
+        db.commit()
 
 
 SEED_KEYWORDS = [

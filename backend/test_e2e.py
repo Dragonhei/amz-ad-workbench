@@ -244,6 +244,53 @@ check("删除 DSL 规则", dr.get("ok") is True)
 rules_after = c.get("/api/analysis/rules", headers=H).json()["items"]
 check("规则列表中已移除", not any(r["id"] == did for r in rules_after), f"剩余 {len(rules_after)} 条")
 
+print("\n=== 6c. 执行回填与效果复盘（P1-5）===")
+# 重新运行分析，得到可回填的行动项
+rr3 = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False},
+             headers=H).json()
+items3 = rr3.get("items", [])
+check("P1-5 前置：有可回填行动项", len(items3) >= 1, f"{len(items3)} 条")
+if items3:
+    iid = items3[0]["id"]
+    # 取数据范围，把执行日期设在中点，前后各 7 天，保证两个窗口都有数据
+    rng = c.get("/api/bi/range?shop_id=1", headers=H).json()
+    from datetime import date as _d, timedelta as _td
+    start = _d.fromisoformat(rng["start"]); end = _d.fromisoformat(rng["end"])
+    span = max((end - start).days, 14)
+    exec_date = (start + _td(days=span // 2)).isoformat()
+    ex = c.post(f"/api/analysis/items/{iid}/execute", json={
+        "change_note": "P1-5 验收：下调高花费活动竞价 15%",
+        "before_days": 7, "after_days": 7, "exec_date": exec_date,
+    }, headers=H).json()
+    check("执行回填返回前后快照", ex.get("ok") and isinstance(ex.get("before"), dict)
+          and "spend" in (ex.get("before") or {}), f"before keys={list((ex.get('before') or {}).keys())[:6]}")
+    check("前后快照均为有效摘要", all(k in ex.get("after", {}) for k in ("acos", "sales")),
+          f"after keys present={all(k in ex.get('after', {}) for k in ('acos','sales'))}")
+    # 单条执行记录可查
+    eg = c.get(f"/api/analysis/items/{iid}/execution", headers=H).json()
+    check("执行记录可查", eg.get("ok") and eg.get("execution") and eg["execution"]["action_id"] == iid,
+          f"action_id={eg.get('execution', {}).get('action_id')}")
+    check("执行记录含改动说明", eg.get("execution", {}).get("change_note", "").startswith("P1-5 验收"),
+          eg.get("execution", {}).get("change_note", "")[:20])
+    # 复盘列表应包含该行动项并计算 lift
+    rt = c.get("/api/analysis/retro?shop_id=1", headers=H).json()
+    retro_items = rt.get("items", [])
+    mine = [x for x in retro_items if x["action_id"] == iid]
+    check("复盘列表包含该行动项", len(mine) == 1, f"命中 {len(mine)} 条")
+    if mine:
+        lift = mine[0].get("lift") or {}
+        check("复盘计算核心指标 lift", isinstance(lift, dict) and "acos" in lift and "spend" in lift,
+              f"lift 含 {list(lift.keys())[:6]}")
+    # recompute 不报错
+    rt2 = c.get("/api/analysis/retro?shop_id=1&recompute=1", headers=H).json()
+    check("复盘 recompute 不报错", rt2.get("items") is not None, f"{len(rt2.get('items', []))} 条")
+    # 该 item 在后续运行中应标记 executed
+    rr4 = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False},
+                 headers=H).json()
+    rerun = [i for i in rr4.get("items", []) if i["id"] == iid]
+    check("已执行项在分析中标记 executed", any(i.get("executed") for i in rerun) if rerun else True,
+          f"executed={rerun[0].get('executed') if rerun else 'n/a'}")
+
 print("\n=== 7. 知识库 ===")
 kw = c.get("/api/kb/keyword?shop_id=1").json()["items"]
 check("关键词库种子数据", len(kw) >= 10, f"{len(kw)} 条")

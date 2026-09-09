@@ -334,7 +334,25 @@ class ActionItem(Base):
     priority = Column(String(16), default="P2")
     confidence = Column(Float, default=0.6)
     status = Column(String(16), default="pending")   # pending|adopted|rejected|done
+    executed = Column(Boolean, default=False)         # P1-5 是否已执行回填
+    executed_at = Column(DateTime, nullable=True)      # P1-5 执行回填时间
     created_at = Column(DateTime, default=utcnow)
+
+
+class ActionExecution(Base):
+    """P1-5 方案执行回填：记录某一行动项的具体改动与执行前后指标快照，支撑效果复盘。"""
+    __tablename__ = "action_execution"
+    id = Column(Integer, primary_key=True)
+    action_id = Column(Integer, ForeignKey("action_item.id"))
+    shop_id = Column(Integer, default=1)
+    executed_at = Column(DateTime, default=utcnow)    # 回填记录时间
+    exec_date = Column(Date, default=date.today)      # 实际落地（执行）日期
+    before_days = Column(Integer, default=7)          # 执行前回看天数
+    after_days = Column(Integer, default=7)           # 执行后回看天数
+    change_note = Column(Text, default="")             # 改动说明
+    before_snapshot = Column(Text, default="{}")      # 执行前 N 天聚合摘要 JSON
+    after_snapshot = Column(Text, default="{}")       # 执行后 N 天聚合摘要 JSON
+    __table_args__ = (Index("ix_act_exec_action", "action_id"),)
 
 
 class Evidence(Base):

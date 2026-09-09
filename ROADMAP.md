@@ -53,12 +53,12 @@
 - **种子数据**：内置 2 条示例 DSL 规则（活动 ACOS 超阈值、关键词 CTR 偏低）演示。
 - **验收**：e2e 6b 节覆盖 DSL meta、合法/非法 DSL 校验、`POST` 创建规则、运行分析断言该规则命中并产出对应维度结论（带证据）、`DELETE` 规则后列表移除；全量 **69/69 通过**（新增 10 项）。工作量 **L**（已完成）。
 
-### P1-5 方案执行回填与效果复盘
-- **目标**：把分析行动项标记为「已执行」并回填改动，复盘执行前后效果。
-- **数据模型**：新增 `ActionExecution`(action_id, executed_at, before_snapshot JSON, after_snapshot JSON, change_note)；`ActionItem` 加 `executed` 标志。
-- **后端**：`POST /api/analysis/items/{iid}/execute` 记录执行与前后快照；`GET /api/analysis/retro` 对比执行前后 N 天指标 lift（ACOS/CVR/花费/销售额）。
-- **前端**：行动项「执行并回填」按钮；复盘前后对比图（执行日前后区间叠加）。
-- **验收**：标记执行后能看到前后指标 diff 与提升幅度。工作量 **M**。
+### P1-5 方案执行回填与效果复盘 ✅ 已完成
+- **目标**：把分析行动项标记为「已执行」并回填改动，复盘执行前后效果，形成分析闭环。
+- **数据模型**：新增 `ActionExecution`(action_id, shop_id, executed_at, exec_date, before_days, after_days, change_note, before_snapshot JSON, after_snapshot JSON)；`ActionItem` 加 `executed`(Boolean) / `executed_at`(DateTime)。旧库经 `seed._ensure_schema` ALTER 补齐 `action_item.executed/executed_at`。
+- **后端**：`POST /api/analysis/items/{iid}/execute` 按 `exec_date` 前后 N 天窗口调用 `metrics.aggregate` 生成前后指标快照并落库，标记 item 已执行；`GET /api/analysis/items/{iid}/execution` 查单条回填；`GET /api/analysis/retro?shop_id=&recompute=` 汇总所有执行记录，对 ACOS/TACOS/CVR/CTR/CPC/花费/销售额/订单/ROAS/曝光/点击计算环比与改善方向（依据指标 higher_better），`recompute=1` 可基于最新数据重算快照。
+- **前端**：行动项卡片加「执行并回填」按钮（弹窗填执行日期/前后天数/改动说明）与「已执行」标签；新增「效果复盘」Tab——ECharts 前后 ACOS 对比柱状图 + 前后指标表（红涨=改善，绿跌=变差）。
+- **验收**：e2e 6c 节覆盖运行分析→取项→执行回填→快照返回→执行记录可查→复盘列表命中并含 lift→recompute 不报错，全量 **78/78 通过**（新增 9 项）。工作量 **M**（已完成）。
 
 ### P1-6 库存联动预警 ✅ 已完成
 - **目标**：低库存 / 可售天数不足时联动广告预警（建议降预算或暂停）。

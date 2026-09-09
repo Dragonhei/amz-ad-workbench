@@ -5,6 +5,7 @@ import {
 } from 'antd'
 import { ThunderboltOutlined, ExperimentOutlined } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import ReactECharts from 'echarts-for-react'
 import api from '../api.js'
 import { useCtx } from '../App.jsx'
 
@@ -41,6 +42,12 @@ export default function Analysis() {
   const [dslSaving, setDslSaving] = useState(false)
   const [tabKey, setTabKey] = useState('rules')
 
+  // P1-5 执行回填与效果复盘
+  const [retro, setRetro] = useState([])
+  const [execOpen, setExecOpen] = useState(false)
+  const [execItem, setExecItem] = useState(null)
+  const [execForm, setExecForm] = useState({ change_note: '', before_days: 7, after_days: 7, exec_date: dayjs() })
+
   const load = () => {
     api.get('/analysis/providers').then((r) => {
       setProviders(r.data.items)
@@ -52,11 +59,33 @@ export default function Analysis() {
     api.get('/analysis/dsl/meta').then((r) => setDslMeta(r.data)).catch(() => {})
     api.get('/analysis/prompt?code=default').then((r) => setPrompt(r.data.content)).catch(() => {})
     api.get(`/analysis/runs?shop_id=${shopId}`).then((r) => setRuns(r.data.items)).catch(() => {})
+    api.get(`/analysis/retro?shop_id=${shopId}`).then((r) => setRetro(r.data.items)).catch(() => {})
     api.get(`/bi/range?shop_id=${shopId}`).then((r) => {
       if (r.data.start) setRange([dayjs(r.data.start), dayjs(r.data.end)])
     }).catch(() => {})
   }
   useEffect(load, [shopId])
+
+  const fmtMetric = (code, val) => {
+    if (val == null) return '-'
+    if (['acos', 'tacos', 'cvr', 'ctr'].includes(code)) return `${val}%`
+    if (['spend', 'sales'].includes(code)) return `$${val}`
+    return `${val}`
+  }
+  const retroCell = (code, lift) => {
+    if (!lift) return <span className="wb-muted">-</span>
+    const { before, after, delta_pct, improved } = lift
+    return (
+      <span>
+        {fmtMetric(code, before)} → {fmtMetric(code, after)}
+        {delta_pct !== null && (
+          <Tag color={improved ? 'red' : 'green'} style={{ marginLeft: 4 }}>
+            {improved ? '↑' : '↓'}{Math.abs(delta_pct)}%
+          </Tag>
+        )}
+      </span>
+    )
+  }
 
   const dimName = useMemo(() => {
     const m = {}
@@ -341,6 +370,46 @@ export default function Analysis() {
                             message.success('提示词已保存')
                           }}>保存提示词</Button>
                 </div>) },
+              { key: 'retro', label: '效果复盘', children: (
+                <div>
+                  <Alert type="info" showIcon style={{ marginBottom: 10 }}
+                    message="标记行动方案为「已执行并回填」后，可在此对比执行前后的核心指标变化。"
+                    description="ACOS / 花费 / TACOS 越低越好（红涨=改善），CTR / CVR / 销售额 / 订单 / ROAS 越高越好（红涨=改善）。执行日期建议设为改动实际落地日。" />
+                  {retro.length === 0 ? <Empty description="暂无执行回填记录，请在上方行动方案点击「执行并回填」" /> : (
+                    <>
+                      <ReactECharts option={{
+                        title: { text: '执行前后 ACOS 对比', left: 'center', textStyle: { fontSize: 13 } },
+                        tooltip: { trigger: 'axis' },
+                        legend: { bottom: 0, data: ['执行前', '执行后'] },
+                        grid: { top: 40, bottom: 56, containLabel: true },
+                        xAxis: { type: 'category',
+                          data: retro.filter((r) => r.before?.acos != null && r.after?.acos != null)
+                                     .map((r) => (r.title || '').slice(0, 12)),
+                          axisLabel: { interval: 0, rotate: 22 } },
+                        yAxis: { type: 'value', name: 'ACOS %' },
+                        series: [
+                          { name: '执行前', type: 'bar',
+                            data: retro.filter((r) => r.before?.acos != null).map((r) => r.before.acos),
+                            itemStyle: { color: '#91caff' } },
+                          { name: '执行后', type: 'bar',
+                            data: retro.filter((r) => r.after?.acos != null).map((r) => r.after.acos),
+                            itemStyle: { color: '#ff7875' } },
+                        ],
+                      }} style={{ height: 300 }} />
+                      <Table size="small" rowKey="id" pagination={false} dataSource={retro}
+                        columns={[
+                          { title: '行动项', dataIndex: 'title', ellipsis: true },
+                          { title: '维度', dataIndex: 'dimension', width: 90, render: (v) => dimName[v] || v },
+                          { title: '执行日期', dataIndex: 'exec_date', width: 110 },
+                          { title: '改动说明', dataIndex: 'change_note', ellipsis: true },
+                          { title: 'ACOS 前→后', width: 150, render: (_, r) => retroCell('acos', r.lift?.acos) },
+                          { title: 'CVR 前→后', width: 140, render: (_, r) => retroCell('cvr', r.lift?.cvr) },
+                          { title: '花费 前→后', width: 140, render: (_, r) => retroCell('spend', r.lift?.spend) },
+                          { title: '销售额 前→后', width: 150, render: (_, r) => retroCell('sales', r.lift?.sales) },
+                        ]} />
+                    </>
+                  )}
+                </div>) },
             ]} />
           </Card>
 
@@ -360,10 +429,12 @@ export default function Analysis() {
                       <Card key={i.id} size="small" style={{ marginBottom: 8 }}
                             title={<Space size={6}>
                               <Tag color={i.priority === 'P0' ? 'red' : i.priority === 'P1' ? 'orange' : 'blue'}>{i.priority}</Tag>
+                              {i.executed && <Tag color="green">已执行</Tag>}
                               <span style={{ fontSize: 13, fontWeight: 400 }}>{i.title}</span>
                             </Space>}
-                            extra={<Space size={4}>
+                            extra={                          <Space size={4}>
                               <Button type="link" size="small" onClick={() => { setEvItem(i); setEvOpen(true) }}>查看依据</Button>
+                              <Button size="small" onClick={() => { setExecItem(i); setExecForm({ change_note: '', before_days: 7, after_days: 7, exec_date: dayjs() }); setExecOpen(true) }}>执行并回填</Button>
                               <Button size="small" type={i.status === 'adopted' ? 'primary' : 'default'}
                                       onClick={async () => {
                                         await api.post(`/analysis/items/${i.id}/status`, { status: 'adopted' })
@@ -427,6 +498,43 @@ export default function Analysis() {
           </>
         )}
       </Drawer>
+
+      <Modal title="执行并回填" open={execOpen} onCancel={() => setExecOpen(false)}
+             onOk={async () => {
+               try {
+                 await api.post(`/analysis/items/${execItem.id}/execute`, {
+                   change_note: execForm.change_note,
+                   before_days: execForm.before_days, after_days: execForm.after_days,
+                   exec_date: execForm.exec_date ? execForm.exec_date.format('YYYY-MM-DD') : '',
+                 })
+                 message.success('已记录执行与前后指标快照')
+                 setExecOpen(false); load()
+               } catch (e) { message.error(e.message) }
+             }} okText="保存回填" width={560} destroyOnClose>
+        <Form layout="vertical">
+          <Form.Item label="实际执行日期（改动落地日）">
+            <DatePicker value={execForm.exec_date} style={{ width: '100%' }}
+                        onChange={(d) => setExecForm({ ...execForm, exec_date: d })} />
+          </Form.Item>
+          <Space size={16}>
+            <Form.Item label="执行前回看天数">
+              <InputNumber min={1} max={90} value={execForm.before_days}
+                           onChange={(v) => setExecForm({ ...execForm, before_days: v ?? 7 })} />
+            </Form.Item>
+            <Form.Item label="执行后回看天数">
+              <InputNumber min={1} max={90} value={execForm.after_days}
+                           onChange={(v) => setExecForm({ ...execForm, after_days: v ?? 7 })} />
+            </Form.Item>
+          </Space>
+          <Form.Item label="改动说明">
+            <TextArea rows={3} value={execForm.change_note}
+                      placeholder="例如：将 B0C1 活动竞价下调 15%，暂停 3 个零单词"
+                      onChange={(e) => setExecForm({ ...execForm, change_note: e.target.value })} />
+          </Form.Item>
+        </Form>
+        <Alert type="info" showIcon
+               message="保存后将记录执行前后 N 天的整体指标快照（ACOS/CVR/花费/销售额等），可在「效果复盘」页对比改善幅度。" />
+      </Modal>
     </div>
   )
 }

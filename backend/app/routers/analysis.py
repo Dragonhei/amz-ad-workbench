@@ -2,7 +2,7 @@
 import hashlib
 import json
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,10 +13,10 @@ from sqlalchemy.orm import Session
 from ..auth import assert_shop_access, current_user
 from ..db import get_db
 from ..llm import call_llm, decrypt_key, encrypt_key, mask_key, normalize_items
-from ..metrics import aggregate, period_totals
-from ..models import (ActionItem, AnalysisRun, Evidence, FactAba, FactSearchTerm,
-                      KbBidRule, KbKeyword, LlmProvider, PromptTemplate,
-                      Shop, UsageLog, User, AnalysisRule)
+from ..metrics import METRICS, aggregate, period_totals
+from ..models import (ActionExecution, ActionItem, AnalysisRun, Evidence, FactAba,
+                      FactSearchTerm, KbBidRule, KbKeyword, LlmProvider, PromptTemplate,
+                      Shop, UsageLog, User, AnalysisRule, utcnow)
 from ..rules import DEFAULT_PROMPT, DEFAULT_RULES, DIMENSIONS, run_rules
 from ..dsl import dsl_meta, check_dsl
 
@@ -336,6 +336,7 @@ def _items_of(db, run_id):
         out.append({"id": it.id, "dimension": it.dimension, "title": it.title, "detail": it.detail,
                     "action": it.action, "expected_impact": it.expected_impact,
                     "priority": it.priority, "confidence": it.confidence, "status": it.status,
+                    "executed": bool(it.executed),
                     "evidence": [{"metric_path": e.metric_path, "snapshot": e.snapshot_json} for e in evs]})
     return out
 
@@ -372,3 +373,124 @@ def item_status(iid: int, body: StatusIn, db: Session = Depends(get_db), u: User
     it.status = body.status
     db.commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- P1-5 执行回填与效果复盘
+RETRO_METRICS = ["acos", "tacos", "cvr", "ctr", "cpc", "spend", "sales", "orders", "roas",
+                 "impressions", "clicks"]
+
+
+def _snapshot(db, shop_id, d1, d2):
+    """取某店铺在 [d1,d2] 的整体聚合摘要，作为执行前后指标快照。"""
+    try:
+        return aggregate(db, shop_id, d1, d2, group_by="campaign")["summary"]
+    except Exception:
+        return {}
+
+
+def _calc_lift(before, after):
+    """计算前后快照各核心指标的环比与改善方向。"""
+    hb = {m["code"]: m["higher_better"] for m in METRICS}
+    lift = {}
+    for code in RETRO_METRICS:
+        b, a = before.get(code), after.get(code)
+        if b is None or a is None:
+            lift[code] = None
+            continue
+        delta_pct = ((a - b) / b * 100) if b else None
+        improved = False
+        if delta_pct is not None:
+            improved = (a > b) if hb.get(code, True) else (a < b)
+        lift[code] = {"before": b, "after": a,
+                      "delta_pct": round(delta_pct, 2) if delta_pct is not None else None,
+                      "improved": improved}
+    return lift
+
+
+class ExecuteIn(BaseModel):
+    change_note: str = ""
+    before_days: int = 7
+    after_days: int = 7
+    exec_date: str = ""          # YYYY-MM-DD；默认今天
+
+
+@router.post("/items/{iid}/execute")
+def execute_item(iid: int, body: ExecuteIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    it = db.query(ActionItem).get(iid)
+    if not it:
+        raise HTTPException(404, "建议不存在")
+    run = db.query(AnalysisRun).get(it.run_id) if it.run_id else None
+    shop_id = (run.shop_id if run else 1)
+    exec_date = date.fromisoformat(body.exec_date) if body.exec_date else date.today()
+    before_start = exec_date - timedelta(days=body.before_days)
+    before_end = exec_date - timedelta(days=1)
+    after_start = exec_date
+    after_end = exec_date + timedelta(days=max(body.after_days - 1, 0))
+    before = _snapshot(db, shop_id, before_start, before_end)
+    after = _snapshot(db, shop_id, after_start, after_end)
+    ex = db.query(ActionExecution).filter(ActionExecution.action_id == iid).first()
+    if not ex:
+        ex = ActionExecution(action_id=iid, shop_id=shop_id)
+        db.add(ex)
+    ex.shop_id = shop_id
+    ex.executed_at = utcnow()
+    ex.exec_date = exec_date
+    ex.before_days = body.before_days
+    ex.after_days = body.after_days
+    ex.change_note = body.change_note
+    ex.before_snapshot = json.dumps(before, ensure_ascii=False)
+    ex.after_snapshot = json.dumps(after, ensure_ascii=False)
+    it.executed = True
+    it.executed_at = utcnow()
+    db.commit()
+    return {"ok": True, "execution_id": ex.id,
+            "before": before, "after": after,
+            "lift": _calc_lift(before, after)}
+
+
+@router.get("/items/{iid}/execution")
+def get_execution(iid: int, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    ex = db.query(ActionExecution).filter(ActionExecution.action_id == iid).first()
+    if not ex:
+        return {"ok": False, "execution": None}
+    it = db.query(ActionItem).get(ex.action_id)
+    return {"ok": True, "execution": {
+        "id": ex.id, "action_id": ex.action_id,
+        "title": it.title if it else "", "dimension": it.dimension if it else "",
+        "exec_date": str(ex.exec_date), "before_days": ex.before_days,
+        "after_days": ex.after_days, "change_note": ex.change_note,
+        "before": json.loads(ex.before_snapshot or "{}"),
+        "after": json.loads(ex.after_snapshot or "{}"),
+        "lift": _calc_lift(json.loads(ex.before_snapshot or "{}"),
+                           json.loads(ex.after_snapshot or "{}")),
+        "executed_at": ex.executed_at.strftime("%Y-%m-%d %H:%M") if ex.executed_at else "",
+    }}
+
+
+@router.get("/retro")
+def retro(shop_id: int = 1, recompute: int = 0, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    exs = (db.query(ActionExecution).filter(ActionExecution.shop_id == shop_id)
+           .order_by(ActionExecution.exec_date.desc()).all())
+    out = []
+    for ex in exs:
+        before = json.loads(ex.before_snapshot or "{}")
+        after = json.loads(ex.after_snapshot or "{}")
+        if recompute:
+            try:
+                before = _snapshot(db, ex.shop_id, ex.exec_date - timedelta(days=ex.before_days),
+                                   ex.exec_date - timedelta(days=1))
+                after = _snapshot(db, ex.shop_id, ex.exec_date,
+                                  ex.exec_date + timedelta(days=max(ex.after_days - 1, 0)))
+            except Exception:
+                pass
+        it = db.query(ActionItem).get(ex.action_id)
+        out.append({
+            "id": ex.id, "action_id": ex.action_id,
+            "title": it.title if it else "", "dimension": it.dimension if it else "",
+            "priority": it.priority if it else "",
+            "exec_date": str(ex.exec_date), "before_days": ex.before_days,
+            "after_days": ex.after_days, "change_note": ex.change_note,
+            "before": before, "after": after, "lift": _calc_lift(before, after),
+            "executed_at": ex.executed_at.strftime("%Y-%m-%d %H:%M") if ex.executed_at else "",
+        })
+    return {"items": out}
