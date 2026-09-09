@@ -26,6 +26,9 @@ GROUP_FIELDS = {
     "campaign": ("campaign_id", "campaign_name"),
     "adgroup": ("adgroup_id", "adgroup_name"),
     "keyword": ("keyword_text", "match_type"),
+    "ad_format": ("ad_format",),
+    "placement": ("placement",),
+    "targeting": ("targeting",),
 }
 
 
@@ -88,6 +91,10 @@ def aggregate(db, shop_ids, d1, d2, group_by="campaign", filters=None, sort_by="
         q = q.filter(FactAdPerf.date <= d2)
     if filters.get("ad_format"):
         q = q.filter(FactAdPerf.ad_format == filters["ad_format"])
+    if filters.get("placement"):
+        q = q.filter(FactAdPerf.placement == filters["placement"])
+    if filters.get("targeting"):
+        q = q.filter(FactAdPerf.targeting.like(f"%{filters['targeting']}%"))
     if filters.get("campaign_ids"):
         q = q.filter(FactAdPerf.campaign_id.in_(filters["campaign_ids"]))
     if filters.get("keyword_contains"):

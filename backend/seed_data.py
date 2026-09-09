@@ -13,6 +13,8 @@ SAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "samples")
 FILES = [
     "sp_keyword_report.csv",
     "sp_search_term_report.csv",
+    "sb_keyword_report.csv",
+    "sd_product_report.csv",
     "business_report.csv",
     "aba_search_terms.csv",
     "brand_metrics_report.csv",

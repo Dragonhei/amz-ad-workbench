@@ -31,8 +31,10 @@ CANONICAL_FIELDS = {
     "ABA": ["week_start", "search_term", "search_rank", "top3_click_share", "top3_conv_share"],
     "BIZ": ["date", "asin", "sessions", "page_views", "units", "orders", "total_sales", "inventory"],
 }
-CANONICAL_FIELDS["SB"] = CANONICAL_FIELDS["SP"]
-CANONICAL_FIELDS["SD"] = CANONICAL_FIELDS["SP"]
+# SB/SD 复用 SP 的基础列，并补充品牌/展示广告特有维度
+_SB_SD_EXTRA = ["landing_page_id", "creative_id", "headline", "audience_id", "placement", "associated_asin"]
+CANONICAL_FIELDS["SB"] = CANONICAL_FIELDS["SP"] + _SB_SD_EXTRA
+CANONICAL_FIELDS["SD"] = CANONICAL_FIELDS["SP"] + _SB_SD_EXTRA
 
 REQUIRED_FIELDS = {
     "SP": ["date", "impressions", "clicks", "spend"],
@@ -79,6 +81,14 @@ ALIASES = {
     "page_views": ["page views", "pageviews", "页面浏览量"],
     "total_sales": ["ordered product sales", "total product sales", "total sales", "总销售额"],
     "inventory": ["inventory", "available inventory", "库存", "可用库存"],
+    # SB/SD 专用列别名
+    "landing_page_id": ["landing page", "landing page id", "landing page url", "落地页", "落地页id"],
+    "creative_id": ["creative", "creative id", "creative name", "创意", "创意id"],
+    "headline": ["headline", "标题", "广告标题"],
+    "audience_id": ["audience", "audience id", "matched audience", "受众", "受众id"],
+    "placement": ["placement", "placement type", "page type", "投放位置", "页面类型", "版位"],
+    "associated_asin": ["advertised asin", "advertised asin(s)", "promoted asin", "推广asin",
+                        "广告asin", "商品定向asin"],
 }
 
 # ID 类字段不参与模糊匹配，避免抢走同名的 Name 列（如 Campaign Name）
@@ -197,6 +207,12 @@ def detect_type(headers, filename=""):
         scores["SB"] += 1
     if has("portfolio", "广告组合"):
         scores["SP"] += 1
+    # SB/SD 指纹：品牌 / 展示广告特有列（决定性权重，确保优先于 SP）
+    if has("sponsored brands") or has("landing page", "creative", "headline"):
+        scores["SB"] += 8
+    if has("sponsored display") or has("advertised asin", "page type",
+                                        "matched audience", "matched target"):
+        scores["SD"] += 8
 
     for key, t in (("sp_", "SP"), ("sb_", "SB"), ("sd_", "SD"),
                    ("search_term", "ST"), ("searchterm", "ST"), ("search term", "ST"),

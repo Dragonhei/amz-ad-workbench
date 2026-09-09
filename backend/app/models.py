@@ -159,6 +159,13 @@ class FactAdPerf(Base):
     keyword_text = Column(String(256), default="")
     match_type = Column(String(16), default="")
     targeting = Column(String(256), default="")
+    # SB/SD 专用维度（SP 报表留空）
+    landing_page_id = Column(String(64), default="")    # SB 落地页
+    creative_id = Column(String(64), default="")        # SB 创意
+    headline = Column(String(256), default="")          # SB 标题
+    audience_id = Column(String(64), default="")        # SD 受众
+    placement = Column(String(64), default="")          # 投放位置（Top of Search / Product Pages…）
+    associated_asin = Column(String(32), default="")    # SD 商品定向 ASIN
     impressions = Column(Integer, default=0)
     clicks = Column(Integer, default=0)
     spend = Column(Float, default=0.0)

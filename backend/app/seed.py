@@ -19,6 +19,22 @@ def _ensure_schema(db: Session):
         db.execute(text("ALTER TABLE shop ADD COLUMN timezone VARCHAR(32) "
                         "DEFAULT 'America/New_York'"))
         db.commit()
+    # P1-2：FactAdPerf 补齐 SB/SD 专用列（旧库升级兼容）
+    fact_cols = {r[1] for r in db.execute(text("PRAGMA table_info(fact_ad_perf)")).fetchall()}
+    for col, ctype in (
+        ("landing_page_id", "VARCHAR(64)"),
+        ("creative_id", "VARCHAR(64)"),
+        ("headline", "VARCHAR(256)"),
+        ("audience_id", "VARCHAR(64)"),
+        ("placement", "VARCHAR(64)"),
+        ("associated_asin", "VARCHAR(32)"),
+    ):
+        if col not in fact_cols:
+            db.execute(text(f"ALTER TABLE fact_ad_perf ADD COLUMN {col} {ctype} DEFAULT ''"))
+    if any(col not in fact_cols for col, _ in (
+        ("landing_page_id", ""), ("creative_id", ""), ("headline", ""),
+        ("audience_id", ""), ("placement", ""), ("associated_asin", ""))):
+        db.commit()
 
 
 SEED_KEYWORDS = [

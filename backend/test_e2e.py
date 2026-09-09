@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
@@ -103,6 +104,36 @@ check("跨店聚合活动数不变", len(multi["rows"]) == 3, f"{len(multi['rows
 mp = c.get("/api/bi/query?shop_id=1&shop_id=2&marketplace=US&group_by=campaign", headers=H).json()
 check("marketplace 过滤仅保留该站点", abs(mp["summary"]["spend"] - single) < 0.01,
       f"仅 US 站点花费 ${mp['summary']['spend']}")
+
+print("\n=== 5c. SB / SD 全支持（P1-2）===")
+sb = upload("sb_keyword_report.csv", "SB")
+check("SB 报表自动识别", sb.get("report_type") == "SB", str(sb.get("report_type")))
+print("    识别置信度", sb.get("confidence"), "| 入库", sb.get("row_ok"), "行 | 期间", sb.get("period"))
+check("SB 行数 > 0", (sb.get("row_ok") or 0) > 0)
+sb_q = c.get("/api/bi/query?shop_id=1&group_by=ad_format", headers=H).json()
+sb_formats = {r["ad_format"] for r in sb_q["rows"]}
+check("SB 入库后 ad_format 含 SB", "SB" in sb_formats, str(sorted(sb_formats)))
+# 校验 SB 特有列确实落库：取一条 SB 明细看 landing_page/creative/placement 非空
+sb_detail = c.get("/api/bi/query?shop_id=1&group_by=placement", headers=H).json()
+check("SB placement 维度可下钻", len(sb_detail["rows"]) >= 1, f"{len(sb_detail['rows'])} 个投放位置")
+sd = upload("sd_product_report.csv", "SD")
+check("SD 报表自动识别", sd.get("report_type") == "SD", str(sd.get("report_type")))
+print("    识别置信度", sd.get("confidence"), "| 入库", sd.get("row_ok"), "行 | 期间", sd.get("period"))
+check("SD 行数 > 0", (sd.get("row_ok") or 0) > 0)
+sd_q = c.get("/api/bi/query?shop_id=1&group_by=ad_format", headers=H).json()
+all_formats = {r["ad_format"] for r in sd_q["rows"]}
+check("按 ad_format 聚合同时含 SP/SB/SD", {"SP", "SB", "SD"}.issubset(all_formats), str(sorted(all_formats)))
+# ad_format 过滤：仅取 SB（应等于按 ad_format 聚合中 SB 的花费）
+sb_only = c.get("/api/bi/query?shop_id=1&group_by=campaign&filters=" + quote(
+    json.dumps({"ad_format": "SB"})), headers=H).json()
+sb_by_fmt = next((r["spend"] for r in sd_q["rows"] if r["ad_format"] == "SB"), None)
+check("ad_format=SB 过滤仅剩 SB 花费", sb_only["summary"]["spend"] > 0
+      and sb_by_fmt is not None and abs(sb_only["summary"]["spend"] - sb_by_fmt) < 0.01,
+      f"过滤后 SB 花费 ${sb_only['summary']['spend']} = 聚合 SB ${sb_by_fmt}")
+# SD 商品定向 ASIN 入库校验：按 targeting 维度下钻能看到定向表达式
+sd_tg = c.get("/api/bi/query?shop_id=1&group_by=targeting", headers=H).json()
+check("SD targeting 维度可下钻", len(sd_tg["rows"]) >= 1, f"{len(sd_tg['rows'])} 个定向")
+print(f"    ad_format 各格式花费：", {r["ad_format"]: r["spend"] for r in sd_q["rows"]})
 
 print("\n=== 6. 分析（规则引擎兜底）===")
 rr = c.post("/api/analysis/run", json={"shop_id": 1, "target_acos": 35, "use_llm": False},

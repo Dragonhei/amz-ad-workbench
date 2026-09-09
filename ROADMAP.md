@@ -23,12 +23,13 @@
 - **验收**：e2e 已覆盖——3 店铺清单、跨店聚合花费 = 单店之和、marketplace 过滤仅留该站点、权限越界 403。工作量 **M**。
 - **已知限制**：跨店聚合按 `campaign_id` 归并，不同店铺相同 `campaign_id` 会合并（后续按 `shop_id` 命名空间分组）。
 
-### P1-2 SB / SD 全支持
+### P1-2 SB / SD 全支持 ✅ 已完成
 - **目标**：Sponsored Brands（品牌广告）与 Sponsored Display（展示型广告）报表完整解析、聚合与下钻。
-- **数据模型**：`FactAdPerf` 增加列 `landing_page_id`、`creative_id`、`headline`、`audience_id`、`placement`、`associated_asin`（SD 商品定向）。
-- **后端**：`parsers.detect_type` 增加 SB/SD 指纹（表头含 *Sponsored Brands / Sponsored Display / Targeting / Audience / Landing Page* 等）；字段映射别名表扩展；`/api/ingest/report-types` 补充 SB/SD 类型；BI 增加 `ad_format` / `placement` / `targeting` 下钻维度。
-- **前端**：数据投喂类型选项补全；BI 增加「广告格式 / 投放位置」分组。
-- **验收**：上传一份 SB + 一份 SD 报表能被正确识别、入库并按格式聚合。工作量 **L**。
+- **数据模型**：`FactAdPerf` 新增 6 列 `landing_page_id`、`creative_id`、`headline`、`audience_id`、`placement`、`associated_asin`（SD 商品定向）；旧库经 `seed._ensure_schema` 自动 `ALTER TABLE` 补齐（与 P1-1 timezone 同机制）。
+- **后端**：`parsers.detect_type` 增加 SB/SD 决定性指纹（Landing Page / Creative / Headline / Placement → SB；Advertised ASIN / Page Type / Matched Audience / Matched Target → SD），并扩充别名表与 SB/SD canonical 字段集；`metrics.aggregate` 支持 `ad_format` / `placement` / `targeting` 过滤与分组；`ingest.commit` 落库 6 个新列。
+- **前端**：BI 顶部新增「广告格式」下拉（全部/SP/SB/SD），分组维度新增「广告格式 / 投放位置 / 定向」，金额按店铺币种渲染不变。
+- **验收**：新增示例报表 `sb_keyword_report.csv` / `sd_product_report.csv` 随 3 店铺灌库；e2e 5c 节覆盖 SB/SD 自动识别、入库、按 `ad_format` 聚合同时含 SP/SB/SD、`ad_format=SB` 过滤、placement/targeting 下钻。全量 **45/45 通过**。
+- **已知限制**：SB 与 SD 在 `FactAdPerf` 共用同一张表、以 `ad_format` 区分；跨格式聚合时相同 `campaign_id` 仍会归并（同 P1-1 的跨店命名空间问题，后续按 `shop_id+ad_format` 命名空间分组）。工作量 **L**（已完成）。
 
 ### P1-3 排名追踪与竞品库
 - **目标**：竞品 ASIN/品牌库可视化，排名随时间追踪，掉落预警。

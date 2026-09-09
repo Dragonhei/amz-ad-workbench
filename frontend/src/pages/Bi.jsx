@@ -22,7 +22,14 @@ const METRIC_COLS = [
   { code: 'tacos', title: 'TACOS', render: fmtPct },
 ]
 
-const NAME_FIELD = { campaign: 'campaign_name', adgroup: 'adgroup_name', keyword: 'keyword_text' }
+const GROUP_META = {
+  campaign: { label: '广告活动', field: 'campaign_name' },
+  adgroup: { label: '广告组', field: 'adgroup_name' },
+  keyword: { label: '关键词', field: 'keyword_text' },
+  ad_format: { label: '广告格式', field: 'ad_format' },
+  placement: { label: '投放位置', field: 'placement' },
+  targeting: { label: '定向', field: 'targeting' },
+}
 
 export default function Bi() {
   const { shopIds = [1], currency = 'USD', shops = [] } = useCtx()
@@ -31,6 +38,7 @@ export default function Bi() {
   const [campaigns, setCampaigns] = useState([])
   const [selCamps, setSelCamps] = useState([])
   const [marketplace, setMarketplace] = useState('')
+  const [adFormat, setAdFormat] = useState('')
   const [kwLike, setKwLike] = useState('')
   const [minClicks, setMinClicks] = useState(null)
   const [maxAcos, setMaxAcos] = useState(null)
@@ -64,12 +72,13 @@ export default function Bi() {
 
   const filters = useMemo(() => {
     const f = {}
+    if (adFormat) f.ad_format = adFormat
     if (selCamps.length) f.campaign_ids = selCamps
     if (kwLike) f.keyword_contains = kwLike
     if (minClicks) f.min_clicks = minClicks
     if (maxAcos) f.max_acos = maxAcos
     return f
-  }, [selCamps, kwLike, minClicks, maxAcos])
+  }, [adFormat, selCamps, kwLike, minClicks, maxAcos])
 
   const load = () => {
     setLoading(true)
@@ -98,10 +107,10 @@ export default function Bi() {
   const [drillRows, setDrillRows] = useState(null)
 
   const columns = useMemo(() => {
-    const nf = NAME_FIELD[groupBy]
+    const meta = GROUP_META[groupBy] || GROUP_META.campaign
     const base = [{
-      title: groupBy === 'campaign' ? '广告活动' : groupBy === 'adgroup' ? '广告组' : '关键词',
-      dataIndex: nf, fixed: 'left', width: 260,
+      title: meta.label,
+      dataIndex: meta.field, fixed: 'left', width: 260,
       sorter: true,
       render: (v, r) => (
         <Space size={4}>
@@ -150,9 +159,15 @@ export default function Bi() {
                        { label: '活动', value: 'campaign' },
                        { label: '广告组', value: 'adgroup' },
                        { label: '关键词', value: 'keyword' },
+                       { label: '广告格式', value: 'ad_format' },
+                       { label: '投放位置', value: 'placement' },
+                       { label: '定向', value: 'targeting' },
                      ]} />
           <Select size="small" style={{ width: 140 }} value={marketplace} onChange={setMarketplace}
                   options={mpOptions} />
+          <Select size="small" style={{ width: 150 }} value={adFormat} onChange={setAdFormat}
+                  options={[{ value: '', label: '全部广告格式' }, { value: 'SP', label: 'SP 商品推广' },
+                            { value: 'SB', label: 'SB 品牌推广' }, { value: 'SD', label: 'SD 展示型' }]} />
           <Select size="small" mode="multiple" allowClear style={{ minWidth: 220 }} placeholder="筛选活动"
                   value={selCamps} onChange={setSelCamps}
                   options={campaigns.map((c) => ({ value: c.id, label: c.name }))} />

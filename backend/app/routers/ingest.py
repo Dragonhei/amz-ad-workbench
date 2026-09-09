@@ -195,6 +195,12 @@ def commit(payload: CommitIn, db: Session = Depends(get_db), u: User = Depends(c
                 campaign_id=r.get("campaign_id", ""), campaign_name=r.get("campaign_name", "") or "(未命名活动)",
                 adgroup_id=r.get("adgroup_id", ""), adgroup_name=ag,
                 keyword_text=kw, match_type=r.get("match_type", ""), targeting=r.get("targeting", ""),
+                landing_page_id=str(r.get("landing_page_id") or ""),
+                creative_id=str(r.get("creative_id") or ""),
+                headline=str(r.get("headline") or ""),
+                audience_id=str(r.get("audience_id") or ""),
+                placement=str(r.get("placement") or ""),
+                associated_asin=str(r.get("associated_asin") or ""),
                 impressions=int(r.get("impressions", 0)), clicks=int(r.get("clicks", 0)),
                 spend=float(r.get("spend", 0)), orders=int(r.get("orders", 0)),
                 units=int(r.get("units", 0)), sales=float(r.get("sales", 0)), version_id=ver.id))
