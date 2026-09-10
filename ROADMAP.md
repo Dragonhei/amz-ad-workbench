@@ -77,10 +77,13 @@
 - **后端**：凭证管理（加密）、调度器（APScheduler）、增量同步、复用现有 `parsers` 映射。
 - **工作量**：**L**（外部依赖重，建议放最后）。
 
-### P2-2 多模型对比
-- **目标**：同一份数据用多个 LLM 跑分析，并排对比结论。
-- **后端**：`/api/analysis/run` 支持多 `provider_id`，存每模型 ActionItem 集。
-- **前端**：对比视图（diff 高亮）。工作量 **M**。
+### P2-2 多模型对比 ✅ 已完成
+- **目标**：同一份数据用多个 LLM（或本地模拟模型）并跑分析，并排对比结论差异。
+- **数据模型**：`AnalysisRun` 增加 `compare_group`（VARCHAR，可空，索引），将一次对比中各个模型的运行关联为同一分组；旧库经 `seed._ensure_schema` 自动 `ALTER TABLE` 补齐。
+- **后端**：`RunIn` 增加 `provider_ids: List[int]`；`/api/analysis/run` 在 `provider_ids` 非空时进入对比模式——为列表里每个模型配置各跑一次 `_run_one`，统一归入同一 `compare_group`，返回 `{mode:"compare", compare_group, results[], summary}`；`summary` 含 `dimensions` / `dim_matrix`（维度→覆盖的模型）/ `shared_dims`（所有模型都提到）/ `unique_dims`（仅单一模型独有）。新增 `GET /api/analysis/compare?group=` 按分组号重取对比结果（404/400 边界清晰）；单模型路径（`provider_id` 或默认、带缓存）保持完全兼容。
+- **离线可演示**：`llm.py` 新增 `mock://` 端点分支与 `call_mock_llm`——数据感知（解析 ACOS/花费）+ 模型个性（按 model 名派生稳定变体），不同模型产出可区分的建议集，无需真实 API Key 即可演示多模型对比；`seed.py` 内置两个 `Mock 模型（演示）`（endpoint `mock://`），并默认启用。接入真实模型（OpenAI / DeepSeek / 通义千问等）后自动切换为真实并跑。
+- **前端**：「分析」页新增「多模型对比」Tab——多选模型配置（标注 mock 本地模拟）、一键并跑、并排卡片展示各模型结论（按维度分组），并以 Alert 高亮「共同覆盖维度」与「仅此模型独有维度」。
+- **验收**：e2e 6f 节 9 项（mock 并跑、对比模式、≥2 模型、各模型有结论、维度差异摘要、模型间可见差异、按分组重取、非法分组 404、全无效模型 400）；全量 **104/104 通过**。工作量 **M**（已完成）。
 
 ### P2-3 告警推送 ✅
 - **目标**：把高优（P0/P1）告警推送到 Webhook / 邮件 / 钉钉 / 企业微信 / Slack。

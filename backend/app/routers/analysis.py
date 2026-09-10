@@ -2,8 +2,9 @@
 import hashlib
 import json
 import time
+import uuid
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -207,6 +208,7 @@ class RunIn(BaseModel):
     provider_id: Optional[int] = None
     use_llm: bool = True
     notify: bool = False          # P2-3：运行完成后把 P0/P1 告警推送到启用的渠道
+    provider_ids: List[int] = []  # P2-2 多模型对比：同时并跑多个模型配置
 
 
 def _build_context(db, shop_id, d1, d2, target_acos):
@@ -244,39 +246,28 @@ def _build_context(db, shop_id, d1, d2, target_acos):
             "kb_text": kb_text, "bid_text": bid_text, "summary": s}
 
 
-@router.post("/run")
-def run(body: RunIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
-    assert_shop_access(u, body.shop_id)
+def _run_one(db, u, shop_id, d1, d2, target_acos, provider, use_llm, compare_group=None):
+    """运行单次分析（内置规则 + 可选某模型），落库 AnalysisRun 与 ActionItem。
+
+    返回 (run_obj, items:list[dict], mode, err_msg)。compare_group 非空时把本次运行归入
+    同一个多模型对比分组（P2-2），并强制不走缓存以保留每个模型的独立视角。
+    """
     t0 = time.time()
-    from ..metrics import date_range_of as _range
-    _d1, _d2 = _range(db, body.shop_id)
-    d1 = date.fromisoformat(body.start) if body.start else _d1
-    d2 = date.fromisoformat(body.end) if body.end else _d2
-    shop = db.query(Shop).get(body.shop_id)
-    provider = db.query(LlmProvider).get(body.provider_id) if body.provider_id else \
-        db.query(LlmProvider).filter(LlmProvider.is_default.is_(True)).first()
-
-    ctx = _build_context(db, body.shop_id, d1, d2, body.target_acos)
-    rule_items = run_rules(db, body.shop_id, d1, d2, body.target_acos)
+    shop = db.query(Shop).get(shop_id)
+    ctx = _build_context(db, shop_id, d1, d2, target_acos)
+    rule_items = run_rules(db, shop_id, d1, d2, target_acos)
     rule_hits = "\n".join(f"[{i['dimension']}] {i['title']}" for i in rule_items)
-
     fingerprint = hashlib.md5(
-        f"{body.shop_id}|{d1}|{d2}|{body.target_acos}|{ctx['summary_text']}".encode()).hexdigest()
-    cached = db.query(AnalysisRun).filter(AnalysisRun.fingerprint == fingerprint,
-                                          AnalysisRun.status == "success",
-                                          AnalysisRun.mode == "llm").first()
-    if cached and body.use_llm:
-        return {"run_id": cached.id, "mode": "llm", "cached": True, "message": "命中缓存，直接返回上次结果",
-                "items": _items_of(db, cached.id)}
+        f"{shop_id}|{d1}|{d2}|{target_acos}|{ctx['summary_text']}".encode()).hexdigest()
 
     mode, err_msg, usage = "rule", "", {}
     items = rule_items
-    if body.use_llm and provider and provider.enabled:
+    if use_llm and provider and provider.enabled:
         tmpl = db.query(PromptTemplate).filter(PromptTemplate.code == "default").first()
         content = (tmpl.content if tmpl else DEFAULT_PROMPT)
         prompt = content.format(
-            shop_name=shop.name if shop else f"店铺{body.shop_id}", date_start=d1, date_end=d2,
-            target_acos=body.target_acos, marketplace=(shop.marketplace if shop else "US"),
+            shop_name=shop.name if shop else f"店铺{shop_id}", date_start=d1, date_end=d2,
+            target_acos=target_acos, marketplace=(shop.marketplace if shop else "US"),
             summary_text=ctx["summary_text"], top_rows=ctx["top_rows"] + "\n\n关键词维度：\n" + ctx["top_kw"],
             search_terms=ctx["st_text"], rule_hits=rule_hits or "（无）",
             kb_keywords=ctx["kb_text"], kb_bids=ctx["bid_text"])
@@ -291,19 +282,19 @@ def run(body: RunIn, db: Session = Depends(get_db), u: User = Depends(current_us
         elif err:
             err_msg = err["message"] + "，已降级为内置规则引擎结果"
 
-    pt = int(usage.get("prompt_tokens") or len(prompt) / 4 if mode == "llm" else 0)
+    pt = int(usage.get("prompt_tokens") or (len(prompt) / 4 if mode == "llm" else 0))
     ct = int(usage.get("completion_tokens") or 0)
     cost = round(pt * PRICE_IN + ct * PRICE_OUT, 6)
-    run_obj = AnalysisRun(shop_id=body.shop_id, user_id=u.id, date_start=d1, date_end=d2,
-                          scope_json=json.dumps({"target_acos": body.target_acos}),
+    run_obj = AnalysisRun(shop_id=shop_id, user_id=u.id, date_start=d1, date_end=d2,
+                          scope_json=json.dumps({"target_acos": target_acos}),
                           provider_id=provider.id if provider else None, mode=mode,
                           status="success", tokens=pt + ct, cost=cost,
                           duration_ms=int((time.time() - t0) * 1000),
-                          message=err_msg, fingerprint=fingerprint)
+                          message=err_msg, fingerprint=fingerprint,
+                          compare_group=compare_group)
     db.add(run_obj)
     db.flush()
 
-    item_objs = []
     for it in items:
         item = ActionItem(run_id=run_obj.id, dimension=it["dimension"], title=it["title"],
                           detail=it.get("detail", ""), action=it.get("action", ""),
@@ -312,7 +303,6 @@ def run(body: RunIn, db: Session = Depends(get_db), u: User = Depends(current_us
                           confidence=float(it.get("confidence", 0.6)))
         db.add(item)
         db.flush()
-        item_objs.append(item)
         evs = it.get("evidence") or []
         if isinstance(evs, dict):
             evs = [evs]
@@ -320,24 +310,115 @@ def run(body: RunIn, db: Session = Depends(get_db), u: User = Depends(current_us
             if isinstance(e, dict):
                 db.add(Evidence(item_id=item.id, metric_path=str(e.get("metric_path", ""))[:250],
                                 snapshot_json=json.dumps(e.get("snapshot", e), ensure_ascii=False)[:4000]))
-    db.add(UsageLog(user_id=u.id, shop_id=body.shop_id, run_type="analysis",
+    db.add(UsageLog(user_id=u.id, shop_id=shop_id, run_type="analysis",
                     provider=(provider.name if provider else "rule-engine"),
                     model=(provider.model if provider else "builtin-rules"),
                     prompt_tokens=pt, completion_tokens=ct, cost=cost,
                     status="success" if not err_msg else "degraded", message=err_msg))
     db.commit()
+    return run_obj, _items_of(db, run_obj.id), mode, err_msg
+
+
+def _build_compare_payload(db, group, runs_items):
+    """把 (run_obj, items, mode, err) 列表组装成对比视图 + 维度差异摘要（P2-2）。"""
+    results = []
+    dim_matrix = {}      # dimension -> set(provider_id)
+    for run_obj, items, mode, err in runs_items:
+        p = db.query(LlmProvider).get(run_obj.provider_id) if run_obj.provider_id else None
+        pname = p.name if p else ("规则引擎" if mode == "rule" else "-")
+        pmodel = p.model if p else ""
+        results.append({
+            "run_id": run_obj.id,
+            "provider_id": run_obj.provider_id,
+            "provider_name": pname,
+            "model": pmodel,
+            "mode": mode,
+            "message": err,
+            "item_count": len(items),
+            "items": items,
+        })
+        for it in items:
+            dim_matrix.setdefault(it["dimension"], set()).add(run_obj.provider_id)
+    summary = {
+        "provider_count": len(results),
+        "dimensions": list(dim_matrix.keys()),
+        "dim_matrix": {d: sorted(list(s)) for d, s in dim_matrix.items()},
+        "shared_dims": [d for d, s in dim_matrix.items() if len(s) == len(results)],
+        "unique_dims": [d for d, s in dim_matrix.items() if len(s) == 1],
+    }
+    return {"mode": "compare", "compare_group": group, "results": results, "summary": summary}
+
+
+@router.post("/run")
+def run(body: RunIn, db: Session = Depends(get_db), u: User = Depends(current_user)):
+    assert_shop_access(u, body.shop_id)
+    from ..metrics import date_range_of as _range
+    _d1, _d2 = _range(db, body.shop_id)
+    d1 = date.fromisoformat(body.start) if body.start else _d1
+    d2 = date.fromisoformat(body.end) if body.end else _d2
+    shop = db.query(Shop).get(body.shop_id)
+
+    # P2-2：多模型对比模式——同一份数据并跑多个模型配置，返回并排对比与差异摘要
+    if body.provider_ids:
+        providers = []
+        for pid in body.provider_ids:
+            p = db.query(LlmProvider).get(pid)
+            if p:
+                providers.append(p)
+            else:
+                print(f"[compare] provider {pid} 不存在，已跳过")
+        if not providers:
+            raise HTTPException(400, "未找到可用的模型配置，请先在「模型与运行配置」中添加至少一个")
+        group = uuid.uuid4().hex[:12]
+        runs_items = []
+        for p in providers:
+            run_obj, items, mode, err = _run_one(db, u, body.shop_id, d1, d2, body.target_acos,
+                                                 p, body.use_llm, compare_group=group)
+            runs_items.append((run_obj, items, mode, err))
+        return _build_compare_payload(db, group, runs_items)
+
+    # 单模型路径（兼容既有调用）：优先指定 provider，否则取默认；LLM 命中缓存直接返回
+    provider = db.query(LlmProvider).get(body.provider_id) if body.provider_id else \
+        db.query(LlmProvider).filter(LlmProvider.is_default.is_(True)).first()
+    ctx = _build_context(db, body.shop_id, d1, d2, body.target_acos)
+    rule_items = run_rules(db, body.shop_id, d1, d2, body.target_acos)
+    fingerprint = hashlib.md5(
+        f"{body.shop_id}|{d1}|{d2}|{body.target_acos}|{ctx['summary_text']}".encode()).hexdigest()
+    cached = db.query(AnalysisRun).filter(AnalysisRun.fingerprint == fingerprint,
+                                          AnalysisRun.status == "success",
+                                          AnalysisRun.mode == "llm").first()
+    if cached and body.use_llm:
+        return {"run_id": cached.id, "mode": "llm", "cached": True, "message": "命中缓存，直接返回上次结果",
+                "items": _items_of(db, cached.id)}
+
+    run_obj, items, mode, err_msg = _run_one(db, u, body.shop_id, d1, d2, body.target_acos,
+                                             provider, body.use_llm)
 
     # P2-3：运行完成后把 P0/P1 级告警推送到启用的通知渠道
     notify_sent = 0
     if body.notify:
         from ..routers.notify import dispatch_alerts
-        recs = dispatch_alerts(db, run_obj.id, item_objs, body.shop_id)
+        objs = db.query(ActionItem).filter(ActionItem.run_id == run_obj.id).all()
+        recs = dispatch_alerts(db, run_obj.id, objs, body.shop_id)
         notify_sent = len(recs)
 
     return {"run_id": run_obj.id, "mode": mode, "cached": False,
             "message": err_msg or ("大模型分析完成" if mode == "llm" else "使用内置规则引擎（未启用模型或调用失败）"),
-            "tokens": pt + ct, "cost": cost, "notify_sent": notify_sent,
-            "items": _items_of(db, run_obj.id)}
+            "tokens": run_obj.tokens, "cost": run_obj.cost, "notify_sent": notify_sent,
+            "items": items}
+
+
+@router.get("/compare")
+def get_compare(group: str = "", db: Session = Depends(get_db), u: User = Depends(current_user)):
+    """按对比分组号重新拉取多模型对比结果（用于刷新 / 复盘查看）。"""
+    if not group:
+        raise HTTPException(400, "缺少 group 参数")
+    runs = db.query(AnalysisRun).filter(AnalysisRun.compare_group == group).order_by(AnalysisRun.id).all()
+    if not runs:
+        raise HTTPException(404, "对比分组不存在或已过期")
+    assert_shop_access(u, runs[0].shop_id)
+    runs_items = [(r, _items_of(db, r.id), r.mode, r.message) for r in runs]
+    return _build_compare_payload(db, group, runs_items)
 
 
 def _items_of(db, run_id):

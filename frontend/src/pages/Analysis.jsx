@@ -50,6 +50,11 @@ export default function Analysis() {
   const [execItem, setExecItem] = useState(null)
   const [execForm, setExecForm] = useState({ change_note: '', before_days: 7, after_days: 7, exec_date: dayjs() })
 
+  // P2-2 多模型对比
+  const [compareIds, setCompareIds] = useState([])
+  const [compareRes, setCompareRes] = useState(null)
+  const [compareLoading, setCompareLoading] = useState(false)
+
   const load = () => {
     api.get('/analysis/providers').then((r) => {
       setProviders(r.data.items)
@@ -135,6 +140,29 @@ export default function Analysis() {
     items.forEach((i) => { (g[i.dimension] = g[i.dimension] || []).push(i) })
     return g
   }, [items])
+
+  // P2-2：同一份数据并跑多个模型，返回并排对比与维度差异
+  const runCompare = async () => {
+    if (compareIds.length < 2) { message.warning('请至少选择 2 个模型进行对比'); return }
+    setCompareLoading(true)
+    try {
+      const r = await api.post('/analysis/run', {
+        shop_id: shopId,
+        start: range?.[0]?.format('YYYY-MM-DD') || '',
+        end: range?.[1]?.format('YYYY-MM-DD') || '',
+        target_acos: targetAcos, use_llm: useLlm, provider_ids: compareIds,
+      })
+      setCompareRes(r.data)
+      message.success(`已完成 ${r.data.results?.length || 0} 个模型的并跑对比`)
+    } catch (e) { message.error(e.message) } finally { setCompareLoading(false) }
+  }
+
+  // 按维度分组（对比卡片内复用）
+  const groupByDim = (list) => {
+    const g = {}
+    ;(list || []).forEach((i) => { (g[i.dimension] = g[i.dimension] || []).push(i) })
+    return Object.entries(g)
+  }
 
   // P1-4：根据表单实时拼装 DSL 预览文本
   const dslPreviewText = useMemo(() => {
@@ -416,6 +444,74 @@ export default function Analysis() {
                           { title: '销售额 前→后', width: 150, render: (_, r) => retroCell('sales', r.lift?.sales) },
                         ]} />
                     </>
+                  )}
+                </div>) },
+              { key: 'compare', label: '多模型对比', children: (
+                <div>
+                  <Alert type="info" showIcon style={{ marginBottom: 10 }}
+                    message="多模型对比：同一份数据同时跑多个模型配置，并排比较结论差异。"
+                    description="内置的两个「Mock 模型（演示）」使用 mock:// 端点，无需真实 API Key 即可离线演示；接入真实模型（OpenAI / DeepSeek / 通义千问等）后自动切换为真实并跑。每个模型产出独立分析运行，可逐维度对比覆盖度。" />
+                  <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                    <Select mode="multiple" allowClear style={{ width: '100%' }}
+                            placeholder="选择 2 个及以上模型进行并跑对比"
+                            value={compareIds}
+                            onChange={setCompareIds}
+                            options={providers.map((p) => ({
+                              value: p.id,
+                              label: `${p.name}（${p.model}${p.endpoint?.startsWith('mock://') ? ' · 本地模拟' : ''}）`,
+                            }))} />
+                    <Space>
+                      <Button type="primary" loading={compareLoading} icon={<ExperimentOutlined />}
+                              disabled={compareIds.length < 2} onClick={runCompare}>
+                        运行多模型对比
+                      </Button>
+                      <span className="wb-muted">已选 {compareIds.length} 个模型</span>
+                    </Space>
+                  </Space>
+
+                  {compareRes && (
+                    <div style={{ marginTop: 12 }}>
+                      <Alert type="success" showIcon style={{ marginBottom: 10 }}
+                        message={`对比了 ${compareRes.summary.provider_count} 个模型，共覆盖 ${compareRes.summary.dimensions.length} 个分析维度`}
+                        description={
+                          <div>
+                            <div>共同覆盖维度（所有模型都提到）：{compareRes.summary.shared_dims.join(' / ') || '无'}</div>
+                            <div>仅单一模型独有的维度：{compareRes.summary.unique_dims.join(' / ') || '无'}</div>
+                          </div>
+                        } />
+                      <Row gutter={12}>
+                        {compareRes.results.map((res) => (
+                          <Col xs={24} md={12} key={res.run_id} style={{ marginBottom: 12 }}>
+                            <Card size="small" className="wb-card"
+                                  title={`${res.provider_name}`}
+                                  extra={<Tag color={res.mode === 'llm' ? 'purple' : 'default'}>{res.mode === 'llm' ? '大模型' : '规则引擎'}</Tag>}>
+                              <div className="wb-muted" style={{ marginBottom: 6 }}>
+                                模型 {res.model} · 结论 {res.item_count} 条
+                              </div>
+                              <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                                {groupByDim(res.items).map(([dim, list]) => (
+                                  <div key={dim}>
+                                    <Tag color="geekblue">{dimName[dim] || dim}</Tag>
+                                    {list.map((i) => (
+                                      <Card key={i.id} size="small" style={{ marginBottom: 4 }}
+                                        title={<Space size={4}>
+                                          <Tag color={i.priority === 'P0' ? 'red' : i.priority === 'P1' ? 'orange' : 'blue'}>{i.priority}</Tag>
+                                          <span style={{ fontSize: 12, fontWeight: 400 }}>{i.title}</span>
+                                          {compareRes.summary.unique_dims.includes(dim) && (
+                                            <Tag color="gold">仅此模型</Tag>
+                                          )}
+                                        </Space>}>
+                                        {i.detail && <div style={{ fontSize: 12 }}>{i.detail}</div>}
+                                      </Card>
+                                    ))}
+                                  </div>
+                                ))}
+                              </Space>
+                            </Card>
+                          </Col>
+                        ))}
+                      </Row>
+                    </div>
                   )}
                 </div>) },
             ]} />

@@ -43,7 +43,7 @@ DEFAULT_PROMPT = """你是资深亚马逊广告投放专家。基于以下数据
 竞价基准：{kb_bids}
 
 【输出要求】
-1. 只输出 JSON，结构：{"items":[{"dimension":"预算分配|竞价调整|关键词增删|否定词|广告位|投放结构|Listing 优化|库存联动|节奏排期|竞品应对|风险预警|效果复盘","title":"","detail":"","action":"","expected_impact":"","priority":"P0|P1|P2","confidence":0.0-1.0,"evidence":[{"metric_path":"","snapshot":""}]}]}
+1. 只输出 JSON，结构：{{"items":[{{"dimension":"预算分配|竞价调整|关键词增删|否定词|广告位|投放结构|Listing 优化|库存联动|节奏排期|竞品应对|风险预警|效果复盘","title":"","detail":"","action":"","expected_impact":"","priority":"P0|P1|P2","confidence":0.0-1.0,"evidence":[{{"metric_path":"","snapshot":""}}]}}}}
 2. 12 个维度每个最多 2 条，总计不超过 18 条，按可执行性排序。
 3. 每条必须给出可量化的动作（具体升降百分比、具体关键词、具体预算数字）。
 4. evidence 必须引用上面给出的真实数字，禁止编造未出现的数据。

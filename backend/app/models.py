@@ -333,6 +333,7 @@ class AnalysisRun(Base):
     duration_ms = Column(Integer, default=0)
     message = Column(Text, default="")
     fingerprint = Column(String(64), default="")
+    compare_group = Column(String(64), nullable=True, index=True)   # P2-2 多模型对比分组号
     created_at = Column(DateTime, default=utcnow)
 
 

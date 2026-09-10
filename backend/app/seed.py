@@ -56,6 +56,11 @@ def _ensure_schema(db: Session):
         db.execute(text("ALTER TABLE action_item ADD COLUMN executed_at DATETIME"))
     if "executed" not in ai_cols or "executed_at" not in ai_cols:
         db.commit()
+    # P2-2：analysis_run 补齐 compare_group 列（多模型对比分组）
+    ar_cols = {r[1] for r in db.execute(text("PRAGMA table_info(analysis_run)")).fetchall()}
+    if "compare_group" not in ar_cols:
+        db.execute(text("ALTER TABLE analysis_run ADD COLUMN compare_group VARCHAR(64)"))
+        db.commit()
 
 
 SEED_KEYWORDS = [
@@ -141,6 +146,12 @@ def seed_all(db: Session = None):
                                model="gpt-4o-mini", api_key_enc="",
                                params_json=json.dumps({"temperature": 0.2, "max_tokens": 4000}),
                                enabled=False, is_default=True))
+        # P2-2：内置两个本地模拟模型（endpoint=mock://），无需真实 API Key 即可离线演示多模型对比
+        for _name, _model in (("Mock 模型 A（演示）", "mock-model-a"), ("Mock 模型 B（演示）", "mock-model-b")):
+            if not db.query(LlmProvider).filter(LlmProvider.name == _name).first():
+                db.add(LlmProvider(name=_name, endpoint="mock://", model=_model, api_key_enc="",
+                                   params_json=json.dumps({"temperature": 0.2, "max_tokens": 4000}),
+                                   enabled=True, is_default=False))
         if db.query(KbKeyword).count() == 0:
             for term, intent, rel, st, asin in SEED_KEYWORDS:
                 db.add(KbKeyword(shop_id=1, term=term, intent=intent, relevance=rel, status=st,

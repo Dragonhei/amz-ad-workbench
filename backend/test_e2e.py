@@ -403,5 +403,39 @@ check("运营无权访问未授权店铺", r.status_code == 403, f"HTTP {r.statu
 r = c.get("/api/admin/users", headers={"X-Username": "operator"})
 check("运营无法访问用户管理", r.status_code == 403, f"HTTP {r.status_code}")
 
+print("\n=== 6f. 多模型对比 (P2-2) ===")
+# 取两个本地模拟模型（endpoint 以 mock:// 开头），验证无需真实 Key 即可离线并跑对比
+providers = c.get("/api/analysis/providers", headers=H).json()["items"]
+mock_pids = [p["id"] for p in providers if (p.get("endpoint") or "").startswith("mock://")]
+check("存在可对比的模型配置", len(mock_pids) >= 2, f"mock providers={mock_pids}")
+if len(mock_pids) >= 2:
+    rp = c.post("/api/analysis/run", headers=H, json={
+        "shop_id": 1, "target_acos": 35, "use_llm": True, "provider_ids": mock_pids[:2]})
+    cmp = rp.json()
+    check("对比模式返回 mode=compare", rp.status_code == 200 and cmp.get("mode") == "compare",
+          f"mode={cmp.get('mode')}")
+    check("对比覆盖 ≥2 个模型", cmp.get("summary", {}).get("provider_count", 0) == 2,
+          f"provider_count={cmp.get('summary', {}).get('provider_count')}")
+    check("每个模型均产出结论", all(r.get("item_count", 0) >= 2 for r in cmp.get("results", [])),
+          f"counts={[r.get('item_count') for r in cmp.get('results', [])]}")
+    check("维度差异摘要存在", isinstance(cmp.get("summary", {}).get("dimensions"), list)
+          and len(cmp["summary"]["dimensions"]) >= 2,
+          f"dims={cmp.get('summary', {}).get('dimensions')}")
+    # 两个模型标题应因模型名不同而可区分（差异对比的基础）
+    titles_a = {i["title"] for i in cmp["results"][0]["items"]}
+    titles_b = {i["title"] for i in cmp["results"][1]["items"]}
+    check("不同模型结论可见差异", titles_a != titles_b, f"|A|={len(titles_a)}, |B|={len(titles_b)}")
+    # 按分组号可重新拉取
+    grp = cmp.get("compare_group")
+    rc = c.get(f"/api/analysis/compare?group={grp}", headers=H).json()
+    check("按分组号能重取对比结果", rc.get("mode") == "compare"
+          and rc.get("summary", {}).get("provider_count") == 2, f"group={grp}")
+    # 非法分组号返回 404
+    r404 = c.get("/api/analysis/compare?group=nonexistent", headers=H)
+    check("非法对比分组返回 404", r404.status_code == 404, f"HTTP {r404.status_code}")
+# 全部无效 provider_id 应返回 400
+rb = c.post("/api/analysis/run", headers=H, json={"shop_id": 1, "provider_ids": [99999]})
+check("全部无效模型返回 400", rb.status_code == 400, f"HTTP {rb.status_code}")
+
 print(f"\n===== 通过 {ok} 项，失败 {fail} 项 =====")
 sys.exit(1 if fail else 0)

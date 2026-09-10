@@ -1,5 +1,6 @@
 """大模型接入：OpenAI 兼容协议，指数退避重试、JSON 强约束、失败降级。"""
 import base64
+import hashlib
 import json
 import re
 import time
@@ -60,6 +61,9 @@ def _extract_json(text: str):
 
 def call_llm(provider, system_prompt: str, user_prompt: str):
     """返回 (data, usage, error)。data 为 {"items": [...]} 或 None。"""
+    # P2-2：endpoint 为 mock:// 时走本地模拟，无需真实 API Key，便于离线演示多模型对比
+    if (provider.endpoint or "").strip().startswith("mock://"):
+        return call_mock_llm(provider, system_prompt, user_prompt)
     api_key = decrypt_key(provider.api_key_enc or "")
     if not api_key:
         return None, {}, {"code": "no_key", "message": "未配置 API Key，已自动降级到内置规则引擎"}
@@ -118,6 +122,53 @@ DIMENSION_ZH = {d["code"]: d["name_zh"] for d in
                  {"code": "schedule", "name_zh": "节奏排期"}, {"code": "competitor", "name_zh": "竞品应对"},
                  {"code": "risk", "name_zh": "风险预警"}, {"code": "review", "name_zh": "效果复盘"}]}
 ZH_TO_CODE = {v: k for k, v in DIMENSION_ZH.items()}
+
+
+def _extract_number(text: str, pattern: str):
+    m = re.search(pattern, text or "")
+    return float(m.group(1)) if m else None
+
+
+def call_mock_llm(provider, system_prompt: str, user_prompt: str):
+    """本地模拟大模型：数据感知 + 模型个性。不同 model 名产出可区分的建议集，
+    使多模型对比离线即可演示（endpoint 以 mock:// 开头时生效）。"""
+    model = (provider.model or "mock").strip().lower()
+    acos = _extract_number(user_prompt, r"ACOS\s*([\d.]+)\s*%")
+    spend = _extract_number(user_prompt, r"花费\s*\$?([\d.]+)")
+    roas = _extract_number(user_prompt, r"ROAS\s*([\d.]+)")
+    # 用模型名派生一个稳定变体，决定“独有维度”，保证不同模型产出可见差异
+    variant = int(hashlib.md5(model.encode()).hexdigest(), 16) % 3
+    items = []
+    if acos and acos > 30:
+        items.append({
+            "dimension": "bid", "priority": "P1", "confidence": 0.75,
+            "title": f"[{model}] 高 ACOS 活动建议下调竞价",
+            "detail": f"当前 ACOS {acos:.1f}%，高于目标，建议对高花费活动分批下调竞价 10–15%。",
+            "action": "下调高 ACOS 活动竞价 10–15%",
+            "expected_impact": "预期 ACOS 下降 2–4 个百分点",
+            "evidence": [],
+        })
+    items.append({
+        "dimension": "budget", "priority": "P2", "confidence": 0.6,
+        "title": f"[{model}] 重新分配预算至高转化活动",
+        "detail": f"本期花费 ${spend:.0f}，可削减低效活动预算、向高 ROAS 活动倾斜。",
+        "action": "削减低效活动预算、转投高效活动",
+        "expected_impact": "整体 ROAS 提升",
+        "evidence": [],
+    })
+    extras = [
+        {"dimension": "keyword_add", "priority": "P2", "confidence": 0.55,
+         "title": f"[{model}] 拓展长尾关键词", "detail": "长尾词 CPC 更低、转化更精准。",
+         "action": "新增 10–20 个长尾词", "expected_impact": "降低整体 CPC", "evidence": []},
+        {"dimension": "placement", "priority": "P1", "confidence": 0.62,
+         "title": f"[{model}] 优化广告位投放", "detail": "Top of Search 转化更好但更贵，需平衡。",
+         "action": "调整广告位加价策略", "expected_impact": "提升高价值广告位转化", "evidence": []},
+        {"dimension": "structure", "priority": "P2", "confidence": 0.5,
+         "title": f"[{model}] 调整投放结构", "detail": "按表现拆分活动结构以提升可控性。",
+         "action": "拆分高混杂活动", "expected_impact": "提升结构清晰度与可优化性", "evidence": []},
+    ]
+    items.append(extras[variant])
+    return {"items": items}, {"mock": True, "model": model}, None
 
 
 def normalize_items(data: dict):

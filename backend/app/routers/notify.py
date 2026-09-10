@@ -49,7 +49,7 @@ class TestIn(BaseModel):
 @router.get("/channels")
 def list_channels(db: Session = Depends(get_db), u: User = Depends(current_user)):
     q = db.query(NotificationChannel)
-    if not u.is_admin:
+    if u.role != "admin":
         allowed = set(getattr(u, "shop_ids", []) or [])
         q = q.filter(NotificationChannel.shop_id.in_(allowed or [0]))
     rows = q.order_by(NotificationChannel.id.desc()).all()
