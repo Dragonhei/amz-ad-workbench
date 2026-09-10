@@ -265,12 +265,22 @@ def _run_one(db, u, shop_id, d1, d2, target_acos, provider, use_llm, compare_gro
     if use_llm and provider and provider.enabled:
         tmpl = db.query(PromptTemplate).filter(PromptTemplate.code == "default").first()
         content = (tmpl.content if tmpl else DEFAULT_PROMPT)
-        prompt = content.format(
-            shop_name=shop.name if shop else f"店铺{shop_id}", date_start=d1, date_end=d2,
-            target_acos=target_acos, marketplace=(shop.marketplace if shop else "US"),
-            summary_text=ctx["summary_text"], top_rows=ctx["top_rows"] + "\n\n关键词维度：\n" + ctx["top_kw"],
-            search_terms=ctx["st_text"], rule_hits=rule_hits or "（无）",
-            kb_keywords=ctx["kb_text"], kb_bids=ctx["bid_text"])
+        try:
+            prompt = content.format(
+                shop_name=shop.name if shop else f"店铺{shop_id}", date_start=d1, date_end=d2,
+                target_acos=target_acos, marketplace=(shop.marketplace if shop else "US"),
+                summary_text=ctx["summary_text"], top_rows=ctx["top_rows"] + "\n\n关键词维度：\n" + ctx["top_kw"],
+                search_terms=ctx["st_text"], rule_hits=rule_hits or "（无）",
+                kb_keywords=ctx["kb_text"], kb_bids=ctx["bid_text"])
+        except (KeyError, IndexError):
+            # 模板含未转义的大括号（如字面 JSON 示例）会导致 str.format 失败；
+            # 回退到系统默认（已转义）提示词，保证分析接口不 500。
+            prompt = DEFAULT_PROMPT.format(
+                shop_name=shop.name if shop else f"店铺{shop_id}", date_start=d1, date_end=d2,
+                target_acos=target_acos, marketplace=(shop.marketplace if shop else "US"),
+                summary_text=ctx["summary_text"], top_rows=ctx["top_rows"] + "\n\n关键词维度：\n" + ctx["top_kw"],
+                search_terms=ctx["st_text"], rule_hits=rule_hits or "（无）",
+                kb_keywords=ctx["kb_text"], kb_bids=ctx["bid_text"])
         data, usage, err = call_llm(provider, "你是资深亚马逊广告投放专家，只输出严格 JSON。", prompt)
         if data:
             norm = normalize_items(data)

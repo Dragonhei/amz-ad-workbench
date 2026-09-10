@@ -139,8 +139,13 @@ def seed_all(db: Session = None):
                 db.add(AnalysisRule(code=r["code"], name_zh=r["name_zh"], dimension=r["dimension"],
                                     condition_json="{}", dsl_text=r["dsl_text"],
                                     advice_template=r["advice_template"], priority=r["priority"]))
-        if not db.query(PromptTemplate).filter(PromptTemplate.code == "default").first():
+        # default 提示词始终与代码内的 DEFAULT_PROMPT（已转义字面大括号）保持同步；
+        # 旧库可能残留转义修复前种入的未转义内容，这里在启动时校正，避免 format 抛 KeyError。
+        _pt = db.query(PromptTemplate).filter(PromptTemplate.code == "default").first()
+        if _pt is None:
             db.add(PromptTemplate(code="default", name_zh="12 维分析提示词", content=DEFAULT_PROMPT))
+        elif _pt.content != DEFAULT_PROMPT:
+            _pt.content = DEFAULT_PROMPT
         if not db.query(LlmProvider).first():
             db.add(LlmProvider(name="内置规则引擎（默认）", endpoint="https://api.openai.com/v1/chat/completions",
                                model="gpt-4o-mini", api_key_enc="",
