@@ -143,3 +143,41 @@ def test_evaluate_rule_keyword_scope(facts):
 def test_parse_dsl_none_input():
     d = parse_dsl(None)
     assert not d["valid"]
+
+
+def test_evaluate_rule_adgroup_scope(facts):
+    _insert(facts, adgroup_id="AG1", adgroup_name="AdGroup A", spend=300.0, sales=400.0)
+    d = parse_dsl('WHEN acos > 30 FOR adgroup THEN structure "审视广告组结构"')
+    items = evaluate_rule(facts, 1, date(2026, 1, 1), date(2026, 1, 31), d)
+    assert any("AdGroup A" in it["detail"] for it in items)
+
+
+def test_evaluate_rule_adformat_scope(facts):
+    _insert(facts, ad_format="SB", spend=300.0, sales=400.0)
+    d = parse_dsl('WHEN acos > 30 FOR ad_format THEN placement "调整广告格式"')
+    items = evaluate_rule(facts, 1, date(2026, 1, 1), date(2026, 1, 31), d)
+    assert any("SB" in it["detail"] for it in items)
+
+
+def test_evaluate_rule_placement_scope(facts):
+    _insert(facts, placement="top", spend=300.0, sales=400.0)
+    d = parse_dsl('WHEN acos > 30 FOR placement THEN placement "优化投放位置"')
+    items = evaluate_rule(facts, 1, date(2026, 1, 1), date(2026, 1, 31), d)
+    assert any("top" in it["detail"] for it in items)
+
+
+def test_evaluate_rule_targeting_scope(facts):
+    _insert(facts, targeting="manual", spend=300.0, sales=400.0)
+    d = parse_dsl('WHEN acos > 30 FOR targeting THEN keyword_add "调整定向"')
+    items = evaluate_rule(facts, 1, date(2026, 1, 1), date(2026, 1, 31), d)
+    assert any("manual" in it["detail"] for it in items)
+
+
+def test_evaluate_rule_multiple_triggered(facts):
+    _insert(facts, campaign_id="C1", campaign_name="One", spend=300.0, sales=400.0)
+    _insert(facts, campaign_id="C2", campaign_name="Two", spend=400.0, sales=400.0)
+    d = parse_dsl('WHEN acos > 30 FOR campaign THEN bid "下调竞价"')
+    items = evaluate_rule(facts, 1, date(2026, 1, 1), date(2026, 1, 31), d)
+    assert len(items) == 1
+    assert "One" in items[0]["detail"] and "Two" in items[0]["detail"]
+
