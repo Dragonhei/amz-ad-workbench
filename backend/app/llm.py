@@ -133,9 +133,9 @@ def call_mock_llm(provider, system_prompt: str, user_prompt: str):
     """本地模拟大模型：数据感知 + 模型个性。不同 model 名产出可区分的建议集，
     使多模型对比离线即可演示（endpoint 以 mock:// 开头时生效）。"""
     model = (provider.model or "mock").strip().lower()
-    acos = _extract_number(user_prompt, r"ACOS\s*([\d.]+)\s*%")
-    spend = _extract_number(user_prompt, r"花费\s*\$?([\d.]+)")
-    roas = _extract_number(user_prompt, r"ROAS\s*([\d.]+)")
+    acos = _extract_number(user_prompt, r"ACOS\s*([\d.]+)\s*%") or 0.0
+    spend = _extract_number(user_prompt, r"花费\s*\$?([\d.]+)") or 0.0
+    roas = _extract_number(user_prompt, r"ROAS\s*([\d.]+)") or 0.0
     # 用模型名派生一个稳定变体，决定“独有维度”，保证不同模型产出可见差异
     variant = int(hashlib.md5(model.encode()).hexdigest(), 16) % 3
     items = []
