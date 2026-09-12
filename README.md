@@ -107,10 +107,13 @@ amz-ad-workbench/
 │   │   ├── seed.py          # 种子数据（账号/规则/知识库示例）
 │   │   ├── db.py            # 引擎与 Session
 │   │   ├── main.py          # 应用入口（含前端托管）
-│   │   └── routers/         # ingest / bi / analysis / kb / launch / admin
+│   │   └── routers/         # ingest / bi / analysis / kb / launch / comment / notify / admin
+│   ├── tests/               # pytest 单元 + 路由契约 + 规则集成测试（T1–T3）
+│   ├── scripts/             # gen_api_docs.py：由 OpenAPI 生成 docs/API.md
 │   ├── samples/             # 示例报表生成器（含人为注入的脏数据）
 │   ├── data/                # SQLite 库与上传临时文件（已 gitignore）
 │   ├── requirements.txt     # 后端依赖
+│   ├── requirements-dev.txt # 测试依赖（pytest / coverage）
 │   ├── run.py               # Uvicorn 启动入口
 │   ├── seed_data.py         # 灌入 5 份示例报表（演示数据）
 │   └── test_e2e.py          # 端到端冒烟测试（31 项断言）
@@ -118,6 +121,9 @@ amz-ad-workbench/
 │   ├── src/pages/           # Dashboard / Ingest / Analysis / Bi / Knowledge / Launch / Admin
 │   ├── package.json
 │   └── vite.config.js
+├── docs/
+│   ├── API.md               # 接口文档（全量端点：方法/参数/响应/错误）
+│   └── ERROR_CODES.md       # 错误码与鉴权规范
 ├── .github/workflows/ci.yml # CI：后端 e2e + 前端构建
 ├── start.bat                # Windows 一键启动（后端）
 ├── LICENSE                  # MIT
@@ -213,6 +219,11 @@ cd frontend && npm install && npm run dev   # http://127.0.0.1:5173，已代理 
 ## API 接口一览
 
 所有接口前缀为 `/api`，鉴权演示用请求头 `X-Username`。健康检查在 `/api/health`。
+
+> 📖 **完整接口文档**：[`docs/API.md`](./docs/API.md)（全部端点的方法 / 参数 / 请求体 / 响应结构 / 可能错误码，由 `backend/scripts/gen_api_docs.py` 依据 OpenAPI 自动生成）；
+> **错误码与鉴权规范**：[`docs/ERROR_CODES.md`](./docs/ERROR_CODES.md)。
+>
+> 运行时交互式文档：Swagger UI `/docs`、ReDoc `/redoc`、原始规范 `/openapi.json`。
 
 ### 数据投喂 `/api/ingest`
 | 方法 | 路径 | 说明 |
@@ -310,7 +321,32 @@ cd frontend && npm install && npm run dev   # http://127.0.0.1:5173，已代理 
 
 ## 测试
 
-后端包含端到端冒烟测试（基于 FastAPI `TestClient`，覆盖接入→BI→分析→知识库→冷启动→多用户全流程，31 项断言）：
+### 单元 / 契约 / 集成测试（pytest）
+
+`backend/tests/` 提供三层测试，共 **98 个用例**，覆盖核心逻辑与 API 契约：
+
+| 文件 | 覆盖内容 |
+|---|---|
+| `test_auth.py` / `test_metrics.py` | 鉴权与权限矩阵、指标聚合口径 |
+| `test_dsl.py` | 规则 DSL 解析 / 校验 / 求值（各 scope） |
+| `test_llm.py` | 输出归一化与 mock 模型 |
+| `test_rules.py` / `test_rules_run.py` | 内置规则引擎与 15 个规则块集成 |
+| `test_routers.py` | 路由契约（`/api/bi`、`/api/inventory`、`/api/analysis`，含越权 403、多模型对比） |
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest -q                 # 运行全部用例
+# 覆盖率（coverage CLI）
+python -m coverage run --source=app -m pytest --no-cov -q
+python -m coverage report -m
+```
+
+> 纯逻辑模块覆盖率均 ≥85%（auth 95% / dsl 89% / metrics 96% / rules 95%）。
+
+### 端到端冒烟测试
+
+基于 FastAPI `TestClient`，覆盖接入→BI→分析→知识库→冷启动→多用户全流程（31 项断言）：
 
 ```bash
 cd backend
